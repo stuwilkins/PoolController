@@ -1,7 +1,8 @@
 #include <Wire.h>
 #include <OneWire.h>
-#include <OneWire.h>
 #include <DallasTemperature.h>
+#include <Adafruit_HTU21DF.h>
+#include <Adafruit_SI1145.h>
 #include <Adafruit_ATParser.h>
 #include <Adafruit_BluefruitLE_SPI.h>
 #include <Adafruit_BLEMIDI.h>
@@ -12,35 +13,50 @@
 #include <Adafruit_BluefruitLE_UART.h>
 
 #include "BluefruitConfig.h"
+
 #include "BluetoothConfig.h"
 
 #define MINIMUM_FIRMWARE_VERSION   "0.7.0"
 #define ONE_WIRE_BUS 2
+#define WATER_SERIES_RESISTOR 560    
+ 
+// What pin to connect the sensor to
+#define WATER_SENSOR_PIN A0
+#define WATER_REFERENCE_PIN A1
 
 // Setup a oneWire instance to communicate with any OneWire devices (not just Maxim/Dallas temperature ICs)
 OneWire oneWire(ONE_WIRE_BUS);
 
 // Pass our oneWire reference to Dallas Temperature. 
-DallasTemperature sensors(&oneWire);
+DallasTemperature oneWireSensors(&oneWire);
+//DeviceAddress waterThermometer = {0x28, 0x1D, 0x2C, 0xE1, 0x08, 0x00, 0x00, 0x35};
+DeviceAddress waterThermometer = {0x28, 0x8F, 0x3B, 0xE1, 0x08, 0x00, 0x00, 0xC7};
+
+// Setup other sensors
+Adafruit_HTU21DF htu = Adafruit_HTU21DF();
+Adafruit_SI1145 uv = Adafruit_SI1145();
 
 /* The service information */
 
-int32_t waterTemperatureServiceId;
-int32_t waterTemperatureTempId;
-int32_t airTemperatureServiceId;
-int32_t airTemperatureTempId;
+int32_t environmentServiceId;
+int32_t waterTempId;
+int32_t airTempId;
+int32_t humidityId;
+int32_t waterLevelId;
+int32_t flowSwitchId;
 int32_t outputServiceId;
 int32_t outputId;
 
 /* Output pins */
 int outputLEDL = 13;
-
-/* One-Wire setup */
-OneWire ds(10);  // on pin 10
+int flowSwitchInput = 3;
 
 // Create the bluefruit object
 Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
 Adafruit_BLEGatt  gatt = Adafruit_BLEGatt(ble);
+
+// Enable for debug
+//#define DEBUG
 
 // A small helper
 void error(const __FlashStringHelper*err) {
@@ -48,9 +64,9 @@ void error(const __FlashStringHelper*err) {
   while(1)
   {
     digitalWrite(outputLEDL, HIGH);
-    delay(2000);
+    delay(250);
     digitalWrite(outputLEDL, LOW);
-    delay(2000);
+    delay(250);
   }
 }
 
@@ -61,12 +77,87 @@ void setup() {
 
   // Input output pin setup. 
   pinMode(outputLEDL, OUTPUT);   
-  sensors.begin();
+
+  // Set pump (flow) switch
+  pinMode(flowSwitchInput, INPUT_PULLUP);
 
   // Set L to high to show we are in setup stage
   digitalWrite(outputLEDL, HIGH);
-  delay(10000);
+  delay(5000);
 
+  setupBluetooth();
+  setupBluetoothLE();
+  setupBluetoothCallbacks();
+
+  //Serial.println("Requesting Bluefruit info:");
+  /* Print Bluefruit information */
+  //ble.info();
+
+  // Setup Sensors
+  setupSensors();
+
+  // Set L low to show we are initialized. 
+  digitalWrite(outputLEDL, LOW);
+}
+
+void loop() {
+  digitalWrite(outputLEDL, HIGH);
+
+  readSensors();
+
+  /* Delay before next measurement update */            
+  digitalWrite(outputLEDL, LOW);
+  ble.update(1000);
+  delay(1000);
+}
+
+void readSensors(void)
+{
+  float waterTemp, airTemp, humidity, waterLevel;
+  uint8_t flowSwitch[1];
+  
+  waterTemp = getOneWireTemp(oneWireSensors, waterThermometer);
+  //airTemp = getAirTemp();
+  //humidity = getHumidity();
+  //waterLevel = getWaterSensorLevel();
+  flowSwitch[0] = !digitalRead(flowSwitchInput);
+
+  airTemp = 0.0;
+  humidity = 0.0;
+  waterLevel = 0.0;
+
+  setFloatChar(waterTempId, waterTemp * 1000);  
+  setFloatChar(airTempId, airTemp * 1000);
+  setFloatChar(humidityId, humidity * 1000);
+  setFloatChar(waterLevelId, waterLevel * 1000);
+  gatt.setChar(flowSwitchId, flowSwitch, 1);
+
+  Serial.print(F("Water Temp : "));
+  Serial.print(waterTemp);
+  Serial.print(F(" degC\t\t"));
+  Serial.print(F("Air Temperature "));
+  Serial.print(airTemp);
+  Serial.print(F(" degC\t\t"));
+  Serial.print(F("Humidity "));
+  Serial.print(humidity);
+  Serial.print(F("%\t\t"));
+  Serial.print(F("Water Level "));
+  Serial.print(waterLevel);
+  Serial.print(F("%\t\t"));
+  Serial.print(F("Flow "));
+  if(flowSwitch[0])
+  {
+    Serial.print(F("ON"));
+  } else {
+    Serial.print(F("OFF"));
+  }
+
+  Serial.println(F(""));
+  
+}
+
+void setupBluetooth(void)
+{
   Serial.print(F("Initialising the Bluefruit LE module..."));
   if (!ble.begin(VERBOSE_MODE))
   {
@@ -76,13 +167,12 @@ void setup() {
 
   Serial.println(F("Performing a factory reset..."));
   if (! ble.factoryReset() ){
-       error(F("Couldn't factory reset\n"));
+    error(F("Couldn't factory reset\n"));
   }
 
-  
   if ( !ble.isVersionAtLeast(MINIMUM_FIRMWARE_VERSION) )
   {
-    error( F("Callback requires at least 0.7.0") );
+    error( F("Callbacks requires at least 0.7.0") );
   }
 
   /* Disable command echo from Bluefruit */
@@ -93,95 +183,41 @@ void setup() {
   if (! ble.sendCommandCheckOK(F("AT+GAPDEVNAME=Pool Controller")) ) {
     error(F("Could not set device name?"));
   }
-
-  setupBluetoothLE();
-
-  Serial.println("Performing a SW reset");
-  ble.reset();
-
-    /* Set callbacks */
-  ble.setConnectCallback(connected);
-  ble.setDisconnectCallback(disconnected);
-  ble.setBleUartRxCallback(BleUartRX);
-  ble.setBleGattRxCallback(outputId, BleGattRX);
-
-
-  Serial.println("Requesting Bluefruit info:");
-  /* Print Bluefruit information */
-  ble.info();
-
-  // Set L low to show we are initialized. 
-  digitalWrite(outputLEDL, LOW);
-}
-
-void loop() {
-  digitalWrite(outputLEDL, HIGH);
-  
-  double temp = random(0, 100) / 10.0;
-
-  Serial.print(F("Updating Temperature value to "));
-  Serial.print(temp);
-  Serial.print(F(" Celcuis "));
-
-  // https://developer.bluetooth.org/gatt/characteristics/Pages/CharacteristicViewer.aspx?u=org.bluetooth.characteristic.temperature_measurement.xml
-  // Chars value is 1 flag + 4 float value. Tempearature is in Fahrenheit unit
-  
-  uint8_t temp_measurement[2];
-  int16_t _temp;
-  _temp = (temp * 100);
-  Serial.print(_temp, HEX);
-  Serial.print(F(" "));
-  
-  temp_measurement[0] = _temp >> 8;
-  temp_measurement[1] = _temp & 0xFF;
-
-  Serial.print(temp_measurement[1], HEX);
-  Serial.print(F(" "));
-  Serial.print(temp_measurement[0], HEX);
-  Serial.print(F(" "));
-
-  Serial.println("");
-  
-  gatt.setChar(waterTemperatureTempId, temp_measurement, 2);
-  gatt.setChar(airTemperatureTempId, temp_measurement, 2);
-
-  Serial.print("Requesting temperatures...");
-  sensors.requestTemperatures(); // Send the command to get temperatures
-  Serial.println("DONE");
-  // After we got the temperatures, we can print them here.
-  // We use the function ByIndex, and as an example get the temperature from the first sensor only.
-  Serial.print("Temperature for the device 1 (index 0) is: ");
-  Serial.println(sensors.getTempCByIndex(0));  
-
-  /* Delay before next measurement update */            
-  digitalWrite(outputLEDL, LOW);
-  ble.update(1000);
-  delay(1000);
 }
 
 void setupBluetoothLE(void)
 {
                                
-  waterTemperatureServiceId = gatt.addService(waterTemperatureServiceUUID);
-  if(!waterTemperatureServiceId)
+  environmentServiceId = gatt.addService(environmentServiceUUID);
+  if(!environmentServiceId)
   {
     error(F("Could not add pool service"));
   }
 
-  waterTemperatureTempId = gatt.addCharacteristic(0x2A6E, GATT_CHARS_PROPERTIES_INDICATE, 2, 2, BLE_DATATYPE_BYTEARRAY);
-  if (waterTemperatureTempId == 0) {
-    error(F("Could not add Temperature characteristic"));
+  waterTempId = gatt.addCharacteristic(waterTempCharUUID, GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
+  if (waterTempId == 0) {
+    error(F("Could not add characteristic"));
   }
 
-  airTemperatureServiceId = gatt.addService(airTemperatureServiceUUID);
-  if(!airTemperatureServiceId)
+  airTempId = gatt.addCharacteristic(airTempCharUUID, GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
+  if(!airTempId)
   {
-    error(F("Could not add service"));
+    error(F("Could not add characteristic"));
   }
   
-  airTemperatureTempId = gatt.addCharacteristic(0x2A6E, GATT_CHARS_PROPERTIES_READ, 2, 2, BLE_DATATYPE_BYTEARRAY);
-  if (airTemperatureTempId == 0) {
-    error(F("Could not add Temperature characteristic"));
+  humidityId = gatt.addCharacteristic(humidityCharUUID, GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
+  if (humidityId == 0) {
+    error(F("Could not add characteristic"));
+  }
+
+  waterLevelId = gatt.addCharacteristic(waterLevelCharUUID, GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
+  if (waterLevelId == 0) {
+    error(F("Could not add characteristic"));
+  }
+
+  flowSwitchId = gatt.addCharacteristic(flowSwitchCharUUID, GATT_CHARS_PROPERTIES_READ, 1, 1, BLE_DATATYPE_BYTEARRAY);
+  if (flowSwitchId == 0) {
+    error(F("Could not add characteristic"));
   }
 
   outputServiceId = gatt.addService(outputServiceUUID);
@@ -195,6 +231,18 @@ void setupBluetoothLE(void)
   {
     error(F("Could not create characteristic"));
   }
+
+  Serial.println("Performing a SW reset");
+  ble.reset();
+}
+
+void setupBluetoothCallbacks(void)
+{
+  /* Set callbacks */
+  ble.setConnectCallback(connected);
+  ble.setDisconnectCallback(disconnected);
+  ble.setBleUartRxCallback(BleUartRX);
+  ble.setBleGattRxCallback(outputId, BleGattRX);
 }
 
 void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
@@ -226,5 +274,142 @@ void connected(void)
 void disconnected(void)
 {
   Serial.println( F("Disconnected") );
+}
+
+void setupSensors(void)
+{
+  // Setup HTU21D-F
+  
+  //if (!htu.begin()) {
+  //  error(F("Could not find HTU21D-F"));
+  //}
+
+  // Setup 1-Wire sensors
+
+  oneWireSensors.begin();
+  
+  Serial.print(F("Found "));
+  Serial.print(oneWireSensors.getDeviceCount(), DEC);
+  Serial.println(F(" device\(s\)."));
+  
+  Serial.print("OneWire Parasitic power is: "); 
+  if (oneWireSensors.isParasitePowerMode())
+  {
+    Serial.println("ON");
+  } else {
+    Serial.println("OFF");
+  }
+
+  if (!oneWire.search(waterThermometer))
+  {
+    error(F("Unable to find address for waterThermometer"));
+  }
+
+  oneWireSensors.setResolution(waterThermometer, 12);
+  
+}
+
+// function to print a device address
+void printOneWireAddress(DeviceAddress deviceAddress)
+{
+  for (uint8_t i = 0; i < 8; i++)
+  {
+    if (deviceAddress[i] < 16) Serial.print("0");
+    Serial.print(deviceAddress[i], HEX);
+  }
+}
+
+float getOneWireTemp(DallasTemperature sensor, DeviceAddress address)
+{
+  oneWireSensors.requestTemperatures();
+  float tempC = sensor.getTempC(address);
+  return tempC;
+}
+
+float getAirTemp(void)
+{
+  float temp;
+  temp = htu.readTemperature();
+  return temp;
+}
+
+float getHumidity(void)
+{
+  float hu;
+  hu = htu.readHumidity();
+  return hu;
+}
+
+void setFloatChar(int32_t gattID, float val)
+{
+  uint8_t _val[4];
+  int32_t _intVal;
+
+  _intVal = (int32_t)val;
+  
+  _val[0] = (_intVal >> 24) & 0xFF;
+  _val[1] = (_intVal >> 16) & 0xFF;
+  _val[2] = (_intVal >> 8) & 0xFF;
+  _val[3] = _intVal & 0xFF;
+  
+  gatt.setChar(gattID, _val, 4);
+  
+#ifdef DEBUG
+  Serial.print(F("Setting GattID "));
+  Serial.print(gattID);
+  Serial.print(F(" to val "));
+  Serial.print(_intVal);
+  Serial.print(F(" 0x"));
+  int i;
+  for(i=0;i<4;i++)
+  {
+    crPrintHEX(_val[i], 2);
+  }
+  Serial.println("");
+#endif
+}
+
+//---------------------------------------------------------------------------------
+// crPrintHEX
+//---------------------------------------------------------------------------------
+
+void crPrintHEX(unsigned long DATA, unsigned char numChars) {
+  unsigned long mask  = 0x0000000F;
+  mask = mask << 4*(numChars-1);
+    
+  for (unsigned int i=numChars; i>0; --i) 
+  {
+    Serial.print(((DATA & mask) >> (i-1)*4),HEX);
+    mask = mask >> 4;
+  }
+}
+
+float getWaterSensorLevel(void)
+{
+  float reading, reference;
+  reading = analogRead(WATER_SENSOR_PIN);
+  reference = analogRead(WATER_REFERENCE_PIN);
+  
+#ifdef DEBUG  
+  Serial.print(F("Water analog reading ")); 
+  Serial.print(reading);
+  Serial.print(F(" reference "));
+  Serial.print(reference);
+#endif
+
+  // convert the value to resistance
+  reading = (1023 / reading)  - 1;
+  reading = WATER_SERIES_RESISTOR / reading;
+  reference = (1023 / reference)  - 1;
+  reference = WATER_SERIES_RESISTOR / reference;
+  
+#ifdef DEBUG 
+  Serial.print(" sensor res. "); 
+  Serial.print(reading);
+  Serial.print(F(" reference "));
+  Serial.println(reference);
+#endif
+
+  return 0.0;
 }
 
