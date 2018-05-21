@@ -11,6 +11,8 @@
 #include <Adafruit_BLEEddystone.h>
 #include <Adafruit_BLE.h>
 #include <Adafruit_BluefruitLE_UART.h>
+#include "RTClib.h"
+
 
 #include "BluefruitConfig.h"
 
@@ -35,6 +37,10 @@ DeviceAddress waterThermometer = {0x28, 0x8F, 0x3B, 0xE1, 0x08, 0x00, 0x00, 0xC7
 // Setup other sensors
 Adafruit_HTU21DF htu = Adafruit_HTU21DF();
 Adafruit_SI1145 uv = Adafruit_SI1145();
+
+// Realtime Clock (RTClib)
+RTC_DS3231 rtc;
+char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"};
 
 /* The service information */
 
@@ -64,9 +70,9 @@ void error(const __FlashStringHelper*err) {
   while(1)
   {
     digitalWrite(outputLEDL, HIGH);
-    delay(250);
+    delay(2000);
     digitalWrite(outputLEDL, LOW);
-    delay(250);
+    delay(2000);
   }
 }
 
@@ -96,6 +102,9 @@ void setup() {
   // Setup Sensors
   setupSensors();
 
+  // Setup RTC
+  setupClock();
+  
   // Set L low to show we are initialized. 
   digitalWrite(outputLEDL, LOW);
 }
@@ -115,15 +124,17 @@ void readSensors(void)
 {
   float waterTemp, airTemp, humidity, waterLevel;
   uint8_t flowSwitch[1];
+  uint32_t _now;
   
   waterTemp = getOneWireTemp(oneWireSensors, waterThermometer);
-  //airTemp = getAirTemp();
-  //humidity = getHumidity();
+  airTemp = getAirTemp();
+  humidity = getHumidity();
   //waterLevel = getWaterSensorLevel();
   flowSwitch[0] = !digitalRead(flowSwitchInput);
+  _now = rtc.now().unixtime();
 
-  airTemp = 0.0;
-  humidity = 0.0;
+  //airTemp = 0.0;
+  //humidity = 0.0;
   waterLevel = 0.0;
 
   setFloatChar(waterTempId, waterTemp * 1000);  
@@ -153,7 +164,11 @@ void readSensors(void)
   }
 
   Serial.println(F(""));
-  
+
+  Serial.print(F("Time = "));
+  Serial.print(_now);
+
+  Serial.println(F(""));
 }
 
 void setupBluetooth(void)
@@ -280,9 +295,9 @@ void setupSensors(void)
 {
   // Setup HTU21D-F
   
-  //if (!htu.begin()) {
-  //  error(F("Could not find HTU21D-F"));
-  //}
+  if (!htu.begin()) {
+    error(F("Could not find HTU21D-F"));
+  }
 
   // Setup 1-Wire sensors
 
@@ -411,5 +426,21 @@ float getWaterSensorLevel(void)
 #endif
 
   return 0.0;
+}
+
+void setupClock(void)
+{
+  if(!rtc.begin()) {
+    error(F("Couldn't find RTC"));
+  }
+
+  if (rtc.lostPower()) {
+    Serial.println(F("RTC lost power, setting time from compilation time of sketch."));
+    // following line sets the RTC to the date & time this sketch was compiled
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+    // This line sets the RTC with an explicit date & time, for example to set
+    // January 21, 2014 at 3am you would call:
+    // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
+  }
 }
 
