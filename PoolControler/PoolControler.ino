@@ -45,13 +45,13 @@ char daysOfTheWeek[7][12] = {"Sunday", "Monday", "Tuesday", "Wednesday", "Thursd
 /* The service information */
 
 int32_t environmentServiceId;
+int32_t outputServiceId;
 int32_t waterTempId;
 int32_t airTempId;
 int32_t humidityId;
 int32_t waterLevelId;
 int32_t flowSwitchId;
-int32_t outputServiceId;
-int32_t outputId;
+int32_t lightId;
 
 /* Output pins */
 int outputLEDL = 13;
@@ -80,15 +80,10 @@ void setup() {
   boolean success;
 
   Serial.begin(115200);
-
-  // Input output pin setup. 
   pinMode(outputLEDL, OUTPUT);   
-
-  // Set pump (flow) switch
   pinMode(flowSwitchInput, INPUT_PULLUP);
-
-  // Set L to high to show we are in setup stage
   digitalWrite(outputLEDL, HIGH);
+  
   delay(5000);
 
   setupBluetooth();
@@ -116,22 +111,27 @@ void loop() {
 
   /* Delay before next measurement update */            
   digitalWrite(outputLEDL, LOW);
-  ble.update(1000);
+  //ble.update(1000);
   delay(1000);
 }
 
 void readSensors(void)
 {
   float waterTemp, airTemp, humidity, waterLevel;
+  int16_t uvIndex, vis, ir;
   uint8_t flowSwitch[1];
-  uint32_t _now;
+  uint32_t _now = 0;
   
   waterTemp = getOneWireTemp(oneWireSensors, waterThermometer);
-  airTemp = getAirTemp();
-  humidity = getHumidity();
+  airTemp = htu.readTemperature();
+  humidity = htu.readHumidity();
+  uvIndex = uv.readUV();
+  vis = uv.readVisible();
+  ir = uv.readIR();
+  
   //waterLevel = getWaterSensorLevel();
   flowSwitch[0] = !digitalRead(flowSwitchInput);
-  _now = rtc.now().unixtime();
+  //_now = rtc.now().unixtime();
 
   //airTemp = 0.0;
   //humidity = 0.0;
@@ -142,6 +142,16 @@ void readSensors(void)
   setFloatChar(humidityId, humidity * 1000);
   setFloatChar(waterLevelId, waterLevel * 1000);
   gatt.setChar(flowSwitchId, flowSwitch, 1);
+
+  uint8_t _light[6];
+  _light[0] = (uvIndex >> 8) & 0xFF;
+  _light[1] = uvIndex & 0xFF;
+  _light[2] = (vis >> 8) & 0xFF;
+  _light[3] = vis & 0xFF;
+  _light[4] = (ir >> 8) & 0xFF;
+  _light[5] = ir & 0xFF;
+  
+  gatt.setChar(lightId, _light, 6);
 
   Serial.print(F("Water Temp : "));
   Serial.print(waterTemp);
@@ -162,6 +172,17 @@ void readSensors(void)
   } else {
     Serial.print(F("OFF"));
   }
+
+  Serial.print(F("\t\t"));
+  Serial.print(F(" UV "));
+  Serial.print(((float)uvIndex) / 100);
+  Serial.print(F("\t\t"));
+  Serial.print(F(" VIS "));
+  Serial.print(vis);
+  Serial.print(F("\t\t"));
+  Serial.print(F(" IR "));
+  Serial.print(ir);
+  Serial.print(F("\t\t"));
 
   Serial.println(F(""));
 
@@ -191,8 +212,8 @@ void setupBluetooth(void)
   }
 
   /* Disable command echo from Bluefruit */
-  ble.echo(false);
-  ble.verbose(false);
+  ble.echo(true);
+  ble.verbose(true);
 
   /* Set name of device */
   if (! ble.sendCommandCheckOK(F("AT+GAPDEVNAME=Pool Controller")) ) {
@@ -235,16 +256,9 @@ void setupBluetoothLE(void)
     error(F("Could not add characteristic"));
   }
 
-  outputServiceId = gatt.addService(outputServiceUUID);
-  if(!outputServiceId)
-  {
-    error(F("Could not add Service"));
-  }
-
-  outputId = gatt.addCharacteristic(0x2345, GATT_CHARS_PROPERTIES_WRITE, 1, 4, BLE_DATATYPE_INTEGER);
-  if(!outputId)
-  {
-    error(F("Could not create characteristic"));
+  lightId = gatt.addCharacteristic(lightCharUUID, GATT_CHARS_PROPERTIES_READ, 6, 6, BLE_DATATYPE_BYTEARRAY);
+  if (lightId == 0) {
+    error(F("Could not add characteristic"));
   }
 
   Serial.println("Performing a SW reset");
@@ -257,21 +271,6 @@ void setupBluetoothCallbacks(void)
   ble.setConnectCallback(connected);
   ble.setDisconnectCallback(disconnected);
   ble.setBleUartRxCallback(BleUartRX);
-  ble.setBleGattRxCallback(outputId, BleGattRX);
-}
-
-void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
-{
-  Serial.print( F("[BLE GATT RX] (" ) );
-  Serial.print(chars_id);
-  Serial.print(") len = ");
-  Serial.print(len);
-  
-  if (chars_id == outputId)
-  {  
-    Serial.write(data, len);
-    Serial.println();
-  } 
 }
 
 void BleUartRX(char data[], uint16_t len)
@@ -297,6 +296,11 @@ void setupSensors(void)
   
   if (!htu.begin()) {
     error(F("Could not find HTU21D-F"));
+  }
+
+  // Setup SI1145
+  if(!uv.begin()) {
+    error(F("Could not find SI1145"));
   }
 
   // Setup 1-Wire sensors
@@ -341,20 +345,6 @@ float getOneWireTemp(DallasTemperature sensor, DeviceAddress address)
   return tempC;
 }
 
-float getAirTemp(void)
-{
-  float temp;
-  temp = htu.readTemperature();
-  return temp;
-}
-
-float getHumidity(void)
-{
-  float hu;
-  hu = htu.readHumidity();
-  return hu;
-}
-
 void setFloatChar(int32_t gattID, float val)
 {
   uint8_t _val[4];
@@ -383,6 +373,30 @@ void setFloatChar(int32_t gattID, float val)
   Serial.println("");
 #endif
 }
+
+void setInt16Char(int32_t gattID, int16_t val)
+{
+  uint8_t _val[2];
+  _val[0] = (val >> 8) & 0xFF;
+  _val[1] = val & 0xFF;
+
+  gatt.setChar(gattID, _val, 2);
+
+  #ifdef DEBUG
+  Serial.print(F("Setting GattID "));
+  Serial.print(gattID);
+  Serial.print(F(" to val "));
+  Serial.print(_int);
+  Serial.print(F(" 0x"));
+  int i;
+  for(i=0;i<2;i++)
+  {
+    crPrintHEX(_val[i], 2);
+  }
+  Serial.println("");
+#endif
+}
+  
 
 //---------------------------------------------------------------------------------
 // crPrintHEX
@@ -430,6 +444,8 @@ float getWaterSensorLevel(void)
 
 void setupClock(void)
 {
+  return;
+  
   if(!rtc.begin()) {
     error(F("Couldn't find RTC"));
   }
@@ -443,4 +459,5 @@ void setupClock(void)
     // rtc.adjust(DateTime(2014, 1, 21, 3, 0, 0));
   }
 }
+
 
