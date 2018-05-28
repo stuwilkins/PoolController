@@ -6,8 +6,7 @@
 #include <Adafruit_GFX.h>
 #include <fonts/FreeSans12pt7b.h>
 
-#include "ArialRoundedMTBold_14.h"
-#include "ArialRoundedMTBold_36.h"
+#include <Fonts/FreeMonoBold12pt7b.h>
 #include "BluetoothConfig.h"
 
 // This is calibration data for the raw touch data to the screen coordinates
@@ -21,6 +20,15 @@ Adafruit_STMPE610 ts = Adafruit_STMPE610(STMPE_CS);
 #define TFT_CS 10
 #define TFT_DC 9
 Adafruit_ILI9341 tft = Adafruit_ILI9341(TFT_CS, TFT_DC);
+
+struct data {
+  float water_temp;
+  float air_temp;
+  float humidity;
+  float uv_index;
+  float water_level;
+	uint16_t pump_speed;
+};
 
 void setup() {
   // put your setup code here, t  o run once:
@@ -38,7 +46,7 @@ void setup() {
   }
 
   tft.fillScreen(ILI9341_BLACK);
-  tft.setRotation(2);
+  tft.setRotation(1);
 
   BLE.begin();
 
@@ -47,6 +55,11 @@ void setup() {
 }
 
 void loop() {
+
+  data reading;
+  bool reading_valid = false;
+
+  Serial.println("Starting loop ....");
 
   // check if a peripheral has been discovered
   BLEDevice peripheral = BLE.available();
@@ -64,78 +77,140 @@ void loop() {
     // stop scanning
     BLE.stopScan();
 
-    controlLed(peripheral);
-
-    delay(15000);
-
+    if(connectToController(&peripheral))
+    {
+      reading_valid = readController(&peripheral, &reading);
+    }
+    
     // peripheral disconnected, start scanning again
+    peripheral.disconnect();
+    Serial.println("Peripheral disconnected");
     BLE.scanForName("Pool Controller");
   }
+
+  if(reading_valid)
+  {
+    tft.fillScreen(ILI9341_BLACK);
+    tft.setFont(&FreeMonoBold12pt7b);
   
-  tft.setCursor(0,20);
-  tft.setFont(&FreeSans12pt7b);
-  tft.setTextColor(0xFFFF, 0x0000);
-  tft.setTextSize(1);
-  tft.println("Hello World");
+    tft.setTextColor(0xFFFF, 0x0000);
+    tft.setTextSize(1);
+    tft.setCursor(5,20);
+    tft.println("Water Temp");
+    tft.setCursor(5,45);
+    tft.println("Air Temp");
+    tft.setCursor(5,70);
+    tft.println("Humidity");
+    tft.setCursor(5,95);
+    tft.println("UV Index");
+    tft.setCursor(5,120);
+    tft.println("Water Lvl");
+    tft.setCursor(5,145);
+    tft.println("Pump Spd");
+  
+    tft.setCursor(180,20);
+    tft.println(reading.water_temp);
+    tft.setCursor(180,45);
+    tft.println(reading.air_temp);
+    tft.setCursor(180,70);
+    tft.println(reading.humidity);
+    tft.setCursor(180,95);
+    tft.println(reading.uv_index);
+    tft.setCursor(180,120);
+    tft.println((int)reading.water_level);
+    tft.setCursor(180,145);
+    tft.println((int)reading.pump_speed);
+  
+    tft.setCursor(260,20);
+    tft.print("C");
+    tft.setCursor(260,45);
+    tft.print("C");
+    tft.setCursor(260,70);
+    tft.print("%");
+    tft.setCursor(260,120);
+    tft.print("mm");
+    tft.setCursor(260,145);
+    tft.print("rpm");
 
-  tft.setFont(&ArialRoundedMTBold_36);
-  tft.setCursor(0,100);
-  tft.println("Hello Arial World");
+  }
 
-  delay(10000);
+  delay(60000);
 }
 
 
-void controlLed(BLEDevice peripheral) {
-  int16_t _val = 0;
-  float val = 0;
-  
+bool connectToController(BLEDevice *peripheral) {
+
   // connect to the peripheral
   Serial.println("Connecting ...");
 
-  if (peripheral.connect()) {
+  if (peripheral->connect()) {
     Serial.println("Connected");
   } else {
     Serial.println("Failed to connect!");
-    return;
+    return false;
   }
 
   // discover peripheral attributes
   Serial.println("Discovering attributes ...");
-  if (peripheral.discoverAttributes()) {
+  if (peripheral->discoverAttributes()) {
     Serial.println("Attributes discovered");
   } else {
     Serial.println("Attribute discovery failed!");
-    peripheral.disconnect();
-    return;
+    return false;
   }
+    
+  return true;
+}
 
+bool readController(BLEDevice *peripheral, data *reading)
+{
+  int32_t _val;
+
+  readCharacteristic(peripheral, "1001", &_val, 4);
+  reading->water_temp = (float)_val / 1000;
+  readCharacteristic(peripheral, "1002", &_val, 4);
+  reading->air_temp = (float)_val / 1000;
+  readCharacteristic(peripheral, "1003", &_val, 4);
+  reading->humidity = (float)_val / 1000;
+  readCharacteristic(peripheral, "1006", &_val, 2);
+  reading->uv_index = (float)_val / 100;
+  readCharacteristic(peripheral, "1005", &_val, 4);
+  reading->water_level = (float)_val / 1000;
+  readCharacteristic(peripheral, "1010", &_val, 2);
+  reading->pump_speed = (uint16_t)_val;
+
+  return true;
+  
+}
+
+bool readCharacteristic(BLEDevice *peripheral, const char* characteristic, int32_t *val, int size)
+{
+  int32_t _val = 0;
   // retrieve the LED characteristic
-  BLECharacteristic ledCharacteristic = peripheral.characteristic("67ff8149-1199-4700-a494-00f721975a41");
+  BLECharacteristic c = peripheral->characteristic(characteristic);
 
-  if (!ledCharacteristic) {
-    Serial.println("Peripheral does not have LED characteristic!");
-    goto error;
-  } else if (!ledCharacteristic.canRead()) {
-    Serial.println("Peripheral does not have a readable LED characteristic!");
-    peripheral.disconnect();
-    return;
+  if(c)
+  {
+    
+    c.read();
+
+    int i;
+    for(i=0;i<size;i++)
+    {
+      _val |= (c[i] & 0xFF) << ((size - i - 1) * 8);
+    }
+    
+    *val = _val;
+
+    Serial.print("Read characteristic ");
+    Serial.print(characteristic);
+    Serial.print(" value = ");
+    Serial.print(*val);
+    Serial.println("");
+
+    return true;
   }
-  
-  ledCharacteristic.read();
 
-  _val |= (ledCharacteristic[0] & 0xF) << 12;
-  _val |= (ledCharacteristic[1] & 0xF) << 8;
-  _val |= (ledCharacteristic[2] & 0xF) << 4;
-  _val |= ledCharacteristic[3];
-
-  val = _val / 100.0;
-  
-  Serial.print(val);
-  Serial.println("");
-
-error:
-  peripheral.disconnect();
-  Serial.println("Peripheral disconnected");
+  return false;
 }
 
