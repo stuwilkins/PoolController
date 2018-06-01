@@ -4,7 +4,6 @@ import yaml
 from bluepy.btle import Peripheral
 from struct import unpack
 
-from .bluetooth_setup import pool_chars
 
 logger = logging.getLogger('bluetooth_le_logger')
 logger.setLevel(logging.DEBUG)
@@ -31,14 +30,13 @@ def read_and_convert(char, f=1.0, t='>i'):
     return val[0] / f
 
 
-def read_controller(host):
+def read_controller(host, chars):
     logger.info("Connecting to %s", host)
     p = Peripheral(host, "random")
     service = p.getServiceByUUID("036451ed-6956-41ae-9840-5aca6c150ec7")
     logger.info("Connected")
 
-    event = dict()
-    for c in pool_chars:
+    for c in chars.values():
         logger.info("Reading char %s", c['char'])
         _c = service.getCharacteristics(c['char'])
         _c = _c[0]
@@ -47,13 +45,13 @@ def read_controller(host):
         _v = read_and_convert(_c, c['factor'], c['type'])
         logger.info("Char %s has value %s", c['char'], str(_v))
         logger.info("Adding char %s as event %s", c['char'], c['ev_name'])
-        event[c['ev_name']] = _v
+        c['value'] = _v
 
     p.disconnect()
 
     logger.info('Disconnected')
 
-    return event
+    return chars
 
 
 def send_to_keen_io(event):

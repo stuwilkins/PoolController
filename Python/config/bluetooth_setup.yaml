@@ -1,0 +1,63 @@
+Bluetooth Config:
+    Host: "C8:C4:93:02:58:CF"
+    Services:
+        Pool Service:
+            Service UUID: 036451ed-6956-41ae-9840-5aca6c150ec7
+            Characteristics:
+                Air Humidity:
+                  char: 00001003-0000-1000-8000-00805f9b34fb
+                  ev_name: air_humidity
+                  factor: 1000
+                  mqtt_topic: 'myhome/pool/water_temp'
+                  type: '>i'
+                Air Temperature:
+                  char: 00001002-0000-1000-8000-00805f9b34fb
+                  ev_name: air_temp
+                  factor: 1000
+                  type: '>i'
+                Error Status:
+                  char: 00001012-0000-1000-8000-00805f9b34fb
+                  ev_name: error_status
+                  factor: 1
+                  type: B
+                IR Light Intensity:
+                  char: 00001008-0000-1000-8000-00805f9b34fb
+                  ev_name: ir_light
+                  factor: 1
+                  type: '>h'
+                Pool Water Temp:
+                  char: 00001001-0000-1000-8000-00805f9b34fb
+                  ev_name: pool_water_temp
+                  factor: 1000
+                  mqtt_topic: myhome/pool/water_temp
+                  type: '>i'
+                Pump Speed:
+                  char: 00001010-0000-1000-8000-00805f9b34fb
+                  ev_name: pump_speed
+                  factor: 1
+                  type: '>h'
+                Time Unix Epoch:
+                  char: 00001009-0000-1000-8000-00805f9b34fb
+                  ev_name: measurement_time
+                  factor: 1
+                  type: '>l'
+                UV Index:
+                  char: 00001006-0000-1000-8000-00805f9b34fb
+                  ev_name: UV_index
+                  factor: 100
+                  type: '>h'
+                Visible Light Intensity:
+                  char: 00001007-0000-1000-8000-00805f9b34fb
+                  ev_name: visible_light
+                  factor: 1
+                  type: '>h'
+                Water Flow Sensor:
+                  char: 00001004-0000-1000-8000-00805f9b34fb
+                  ev_name: flow
+                  factor: 1
+                  type: B
+                Water Level:
+                  char: 00001005-0000-1000-8000-00805f9b34fb
+                  ev_name: water_level
+                  factor: 1000
+                  type: '>i'
