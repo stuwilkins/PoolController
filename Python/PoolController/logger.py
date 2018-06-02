@@ -16,11 +16,16 @@ ch.setFormatter(formatter)
 logger.addHandler(ch)
 
 
-def read_config(filename):
-    with open(filename, 'r') as ymlfile:
+def read_config(filedir):
+    with open(filedir + 'keen.yaml', 'r') as ymlfile:
         cfg = yaml.load(ymlfile)
     keen.project_id = cfg['keen.io']['project_id']
     keen.write_key = cfg['keen.io']['write_key']
+    keen.read_key = cfg['keen.io']['read_key']
+
+    with open(filedir + 'pool_controller.yaml', 'r') as yamlfile:
+        cfg = yaml.load(yamlfile)
+
     return cfg
 
 

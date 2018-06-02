@@ -24,7 +24,8 @@ from PoolController.logger import (read_config,
 
 if __name__ == "__main__":
     logger.info("Started logging daemon")
-    cfg = read_config('/etc/pool_controller.yaml')
+    cfg = read_config('/etc/pool_controller')
+
     while True:
         try:
             results = read_controller(cfg['controller']['mac_address'],
