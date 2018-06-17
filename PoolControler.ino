@@ -407,14 +407,18 @@ void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
 
 	if(chars_id == pumpSpeedCmdId)
 	{  
-		if(len == 1){
-			Serial.print("Setting pump speed to ");
-			Serial.println(data[0]);
-			setPumpSpeed(data[0]);
-		} else {
+		if(len != 1)
+		{
 			Serial.println(F("Error setting pump speed"));
+			return;
 		}
+
+		Serial.print("Setting pump speed to ");
+		Serial.println(data[0]);
+		setPumpSpeed(data[0]);
+
 	} else if(chars_id == timeCmdId) {
+		
 		if(len != 4)
 		{
 			Serial.println(F("Invalid time data"));
@@ -429,8 +433,8 @@ void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
 		t |= data[2] << 8;
 		t |= data[3];
 		Serial.println(t, HEX);
-			
-		//rtc.adjust(compile_time + TimeSpan(0, UTC_TIME_OFFSET, 0, 0));
+		DateTime new_time(t)	
+		rtc.adjust(new_time);
 	}
 }
 
