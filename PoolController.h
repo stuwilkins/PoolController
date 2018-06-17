@@ -1,3 +1,28 @@
+/*
+ * =====================================================================================
+ *
+ *       Filename:  PoolController.h
+ *
+ *    Description:  
+ *
+ *        Version:  1.0
+ *        Created:  06/17/2018 14:42:19
+ *       Revision:  none
+ *       Compiler:  gcc
+ *
+ *         Author:  Stuart B. Wilkins (sbw), stuwilkins@mac.com
+ *   Organization:  
+ *
+ * =====================================================================================
+ */
+
+
+#define BUFSIZE                        128
+#define VERBOSE_MODE                   true
+#define BLUEFRUIT_SPI_CS               8
+#define BLUEFRUIT_SPI_IRQ              7
+#define BLUEFRUIT_SPI_RST              4
+
 
 // 
 // Service UUID Definitions

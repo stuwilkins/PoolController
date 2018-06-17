@@ -33,8 +33,7 @@
 #include <Adafruit_BluefruitLE_UART.h>
 #include <RTClib.h>
 
-#include "BluefruitConfig.h"
-#include "BluetoothConfig.h"
+#include "PoolController.h"
 #define MINIMUM_FIRMWARE_VERSION   "0.7.0"
 
 // One Wire Bus Definition
