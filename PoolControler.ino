@@ -44,17 +44,17 @@ DallasTemperature oneWireSensors(&oneWire);
 DeviceAddress waterThermometer = {0x28, 0x8F, 0x3B, 0xE1, 0x08, 0x00, 0x00, 0xC7};
  
 // Analog input for level meter
-#define WATER_LEVEL_PIN   A0
-#define WATER_LEVEL_X     79.69
-#define WATER_LEVEL_C     -36455
+#define WATER_LEVEL_PIN			A0
+#define WATER_LEVEL_X     		79.69
+#define WATER_LEVEL_C     		-36455
 
 // Other digital pins
-#define OUTPUT_LED_L      13
-#define FLOW_SWITCH       0
-#define PUMP_STOP_BIT     10
-#define PUMP_BIT_0        9
-#define PUMP_BIT_1        6
-#define PUMP_BIT_2        5
+#define OUTPUT_LED_L			13
+#define FLOW_SWITCH       		0
+#define PUMP_STOP_BIT     		10
+#define PUMP_BIT_0        		9
+#define PUMP_BIT_1        		6
+#define PUMP_BIT_2        		5
 
 // Setup other sensors
 Adafruit_HTU21DF htu = Adafruit_HTU21DF();
@@ -62,6 +62,7 @@ Adafruit_SI1145 uv = Adafruit_SI1145();
 
 // Realtime Clock (RTClib)
 RTC_DS3231 rtc;
+#define UTC_TIME_OFFSET	        4
 //const char daysOfTheWeek_0[12] PROGMEM = "Sunday";
 //const char daysOfTheWeek_1[12] PROGMEM = "Monday";
 //const char daysOfTheWeek_2[12] PROGMEM = "Tuesday";
@@ -81,7 +82,7 @@ RTC_DS3231 rtc;
 /* The service information */
 
 int32_t environmentServiceId;
-int32_t outputServiceId;
+int32_t timeServiceId;
 int32_t waterTempId;
 int32_t airTempId;
 int32_t humidityId;
@@ -91,6 +92,7 @@ int32_t uvIndexId;
 int32_t visId;
 int32_t irId;
 int32_t timeId;
+int32_t timeCmdId;
 int32_t pumpSpeedId;
 int32_t pumpSpeedCmdId;
 int32_t errorId;
@@ -300,75 +302,85 @@ void setupBluetooth(void)
 
 void setupBluetoothLE(void)
 {
-                               
-  environmentServiceId = gatt.addService(environmentServiceUUID);
-  if(!environmentServiceId)
-  {
-    error(F("Could not add pool service"));
-  }
 
-  waterTempId = gatt.addCharacteristic(waterTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (waterTempId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	environmentServiceId = gatt.addService(environmentServiceUUID);
+	if(!environmentServiceId)
+	{
+		error(F("Could not add pool service"));
+	}
 
-  airTempId = gatt.addCharacteristic(airTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if(!airTempId)
-  {
-    error(F("Could not add characteristic"));
-  }
-  
-  humidityId = gatt.addCharacteristic(humidityCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (humidityId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	waterTempId = gatt.addCharacteristic(waterTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (waterTempId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  waterLevelId = gatt.addCharacteristic(waterLevelCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (waterLevelId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	airTempId = gatt.addCharacteristic(airTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if(!airTempId)
+	{
+		error(F("Could not add characteristic"));
+	}
 
-  flowSwitchId = gatt.addCharacteristic(flowSwitchCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (flowSwitchId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	humidityId = gatt.addCharacteristic(humidityCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (humidityId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  uvIndexId = gatt.addCharacteristic(uvIndexCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (uvIndexId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	waterLevelId = gatt.addCharacteristic(waterLevelCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (waterLevelId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  visId = gatt.addCharacteristic(visCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (visId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	flowSwitchId = gatt.addCharacteristic(flowSwitchCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (flowSwitchId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  irId = gatt.addCharacteristic(irCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (irId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	uvIndexId = gatt.addCharacteristic(uvIndexCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (uvIndexId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  timeId = gatt.addCharacteristic(timeCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (timeId == 0) {
-    error(F("Could not add characteristic"));
-  }
-        
-  pumpSpeedId = gatt.addCharacteristic(pumpSpeedUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (pumpSpeedId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	visId = gatt.addCharacteristic(visCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (visId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  pumpSpeedCmdId = gatt.addCharacteristic(pumpSpeedCmdUUID, GATT_CHARS_PROPERTIES_WRITE, 1, 1, BLE_DATATYPE_BYTEARRAY);
-  if (pumpSpeedCmdId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	irId = gatt.addCharacteristic(irCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (irId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  errorId = gatt.addCharacteristic(errorUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
-  if (errorId == 0) {
-    error(F("Could not add characteristic"));
-  }
+	pumpSpeedId = gatt.addCharacteristic(pumpSpeedUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (pumpSpeedId == 0) {
+		error(F("Could not add characteristic"));
+	}
 
-  ble.reset();
+	pumpSpeedCmdId = gatt.addCharacteristic(pumpSpeedCmdUUID, GATT_CHARS_PROPERTIES_WRITE, 1, 1, BLE_DATATYPE_BYTEARRAY);
+	if (pumpSpeedCmdId == 0) {
+		error(F("Could not add characteristic"));
+	}
+
+	errorId = gatt.addCharacteristic(errorUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	if (errorId == 0) {
+		error(F("Could not add characteristic"));
+	}
+
+	timeServiceId = gatt.addService(timeServiceUUID);
+	if(!timeServiceId)
+	{
+		error(F("Could not add pool service"));
+	}
+	timeId = gatt.addCharacteristic(timeCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 4, 4, BLE_DATATYPE_BYTEARRAY);
+	if (timeId == 0) {
+		error(F("Could not add characteristic"));
+	}
+
+	timeCmdId = gatt.addCharacteristic(timeCmdCharUUID, GATT_CHARS_PROPERTIES_WRITE, 4, 4, BLE_DATATYPE_BYTEARRAY);
+	if (timeCmdId == 0) {
+		error(F("Could not add characteristic"));
+	}
+
+	ble.reset();
 }
 
 void setupBluetoothCallbacks(void)
@@ -387,18 +399,39 @@ void BleUartRX(char data[], uint16_t len)
 
 void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
 {
-  if(chars_id == pumpSpeedCmdId)
-  {  
-    if(len == 1){
-#ifdef DEBUG
-      Serial.print("Setting pump speed to ");
-      Serial.println(data[0]);
-#endif
-      setPumpSpeed(data[0]);
-    } else {
-      Serial.println(F("Error setting pump speed"));
-    }
-  }
+	Serial.print(F("Gatt Callback chars_id = "));
+	Serial.print(chars_id);
+	Serial.print(F(" "));
+	Serial.print(F("len = "));
+	Serial.println(len);
+
+	if(chars_id == pumpSpeedCmdId)
+	{  
+		if(len == 1){
+			Serial.print("Setting pump speed to ");
+			Serial.println(data[0]);
+			setPumpSpeed(data[0]);
+		} else {
+			Serial.println(F("Error setting pump speed"));
+		}
+	} else if(chars_id == timeCmdId) {
+		if(len != 4)
+		{
+			Serial.println(F("Invalid time data"));
+			return;
+		}
+
+		// Set time	
+		Serial.print(F("Setting time to "));
+		uint32_t t = 0x00000000;
+		t |= data[0] << 24;
+		t |= data[1] << 16;
+		t |= data[2] << 8;
+		t |= data[3];
+		Serial.println(t, HEX);
+			
+		//rtc.adjust(compile_time + TimeSpan(0, UTC_TIME_OFFSET, 0, 0));
+	}
 }
 
 void setupSensors(void)
@@ -498,7 +531,7 @@ void setupClock(void)
   if (rtc.lostPower()) {
     Serial.println(F("RTC lost power, setting time from compilation time of sketch."));
     // following line sets the RTC to the date & time this sketch was compiled
-    rtc.adjust(DateTime(F(__DATE__), F(__TIME__)));
+	rtc.adjust(compile_time + TimeSpan(0, UTC_TIME_OFFSET, 0, 0));
   }
 }
 
