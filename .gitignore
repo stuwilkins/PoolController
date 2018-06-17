@@ -2,4 +2,4 @@ __pycache__
 keys.py
 build
 *.swp
-
+.DS_Store
