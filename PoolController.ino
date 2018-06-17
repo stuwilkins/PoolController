@@ -170,100 +170,102 @@ void setup() {
 void loop() {
   readSensors();
   ble.update(1000);
-  delay(5000);
+  delay(2000);
 }
 
 void readSensors(void)
 {
-  float waterTemp = 0;
-  float airTemp = 0;
-  float humidity = 0;
-  float waterLevel = 0;
-  int32_t uvIndex = 0, vis = 0, ir = 0;
-  int32_t flowSwitch = 0;
-  int32_t pumpSpeed = 0;
-  int32_t _now = 0;
-  bool error = false;
+	float waterTemp = 0;
+	float airTemp = 0;
+	float humidity = 0;
+	float waterLevel = 0;
+	int32_t uvIndex = 0, vis = 0, ir = 0;
+	int32_t flowSwitch = 0;
+	int32_t pumpSpeed = 0;
+	int32_t _now = 0;
+	bool error = false;
 
-  digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-  waterTemp = getOneWireTemp(oneWireSensors, waterThermometer);
-  airTemp = htu.readTemperature();
-  humidity = htu.readHumidity();
-  uvIndex = uv.readUV();
-  vis = uv.readVisible();
-  ir = uv.readIR();
-  waterLevel = getWaterSensorLevel();
-  _now = rtc.now().unixtime();
-  flowSwitch = !digitalRead(FLOW_SWITCH);
-  pumpSpeed = getPumpSpeed();
+	digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
+	waterTemp = getOneWireTemp(oneWireSensors, waterThermometer);
+	airTemp = htu.readTemperature();
+	humidity = htu.readHumidity();
+	uvIndex = uv.readUV();
+	vis = uv.readVisible();
+	ir = uv.readIR();
+	waterLevel = getWaterSensorLevel();
+	_now = rtc.now().unixtime();
+	flowSwitch = !digitalRead(FLOW_SWITCH);
+	pumpSpeed = getPumpSpeed();
 
-  if((uvIndex == 0) &&
-     (vis == 0) && (ir == 0))
-  {
-	error_count++;
-    uv.begin();
-  }
+	if((uvIndex == 0) &&
+			(vis == 0) && (ir == 0))
+	{
+		error_count++;
+		uv.begin();
+	}
 
-  setChar(waterTempId, _now, (int32_t)(waterTemp * 1000));  
-  setChar(airTempId, _now, (int32_t)(airTemp * 1000));
-  setChar(humidityId, _now, (int32_t)(humidity * 1000));
-  setChar(waterLevelId, _now, (int32_t)(waterLevel * 1000));
-  setChar(flowSwitchId, _now, (int32_t)(flowSwitch));
-  setChar(uvIndexId, _now, (int32_t)(uvIndex));
-  setChar(visId, _now, (int32_t)(vis));
-  setChar(irId, _now, (int32_t)(ir));
+	setChar32(waterTempId, _now, (int32_t)(waterTemp * 1000));  
+	setChar32(airTempId, _now, (int32_t)(airTemp * 1000));
+	setChar32(humidityId, _now, (int32_t)(humidity * 1000));
+	setChar32(waterLevelId, _now, (int32_t)(waterLevel * 1000));
+	setChar32(flowSwitchId, _now, (int32_t)(flowSwitch));
+	setChar32(uvIndexId, _now, (int32_t)(uvIndex));
+	setChar32(visId, _now, (int32_t)(vis));
+	setChar32(irId, _now, (int32_t)(ir));
 
-  if((pumpSpeed > 1) && (flowSwitch == 1))
-  {
-    setChar(pumpSpeedId, _now, (int32_t)pumpSpeeds[pumpSpeed]); 
-  } else {
-    setChar(pumpSpeedId, _now, 0);
-    error = true;
-  }
-  
-  setChar(errorId, _now, (int32_t)error_count);
+	if((pumpSpeed > 1) && (flowSwitch == 1))
+	{
+		setChar32(pumpSpeedId, _now, (int32_t)pumpSpeeds[pumpSpeed]); 
+	} else {
+		setChar32(pumpSpeedId, _now, 0);
+		error = true;
+	}
+
+	setChar32(errorId, _now, (int32_t)error_count);
+	setChar16(timeId, _now);
 
 #ifdef DEBUG
-  Serial.print(F("Water Temp : "));
-  Serial.print(waterTemp);
-  Serial.print(F(" degC\t\t"));
-  Serial.print(F("Air Temperature "));
-  Serial.print(airTemp);
-  Serial.print(F(" degC\t\t"));
-  Serial.print(F("Humidity "));
-  Serial.print(humidity);
-  Serial.print(F("%\t\t"));
-  Serial.print(F("Water Level "));
-  Serial.print(waterLevel);
-  Serial.print(F("%\t\t"));
-  Serial.print(F("Flow "));
-  if(flowSwitch)
-  {
-    Serial.print(F("ON "));
-  } else {
-    Serial.print(F("OFF"));
-  }
+    Serial.print(F("Water Temp : "));
+    Serial.print(waterTemp);
+    Serial.print(F(" degC\t\t"));
+    Serial.print(F("Air Temperature "));
+    Serial.print(airTemp);
+    Serial.print(F(" degC\t\t"));
+    Serial.print(F("Humidity "));
+    Serial.print(humidity);
+    Serial.print(F("%\t\t"));
+    Serial.print(F("Water Level "));
+    Serial.print(waterLevel);
+    Serial.print(F("%\t\t"));
+    Serial.print(F("Flow "));
 
-  Serial.print(F("\t\t"));
-  Serial.print(F(" UV "));
-  Serial.print(((float)uvIndex) / 100);
-  Serial.print(F("\t\t"));
-  Serial.print(F(" VIS "));
-  Serial.print(vis);
-  Serial.print(F("\t\t"));
-  Serial.print(F(" IR "));
-  Serial.print(ir);
-  Serial.print(F("\t\t"));
+    if(flowSwitch)
+    {
+        Serial.print(F("ON "));
+    } else {
+        Serial.print(F("OFF"));
+    }
+
+    Serial.print(F("\t\t"));
+    Serial.print(F(" UV "));
+    Serial.print(((float)uvIndex) / 100);
+    Serial.print(F("\t\t"));
+    Serial.print(F(" VIS "));
+    Serial.print(vis);
+    Serial.print(F("\t\t"));
+    Serial.print(F(" IR "));
+    Serial.print(ir);
+    Serial.print(F("\t\t"));
     Serial.print(F(" Speed "));
     Serial.print(pumpSpeed);
     Serial.print(F(" "));
     Serial.print(pumpSpeeds[pumpSpeed]);
 
-  Serial.println("");
+    Serial.println("");
 
-  Serial.print(F("Time = 0x"));
-  Serial.print(_now, HEX);
-  Serial.println("");
+    Serial.print(F("Time = 0x"));
+    Serial.print(_now, HEX);
+    Serial.println("");
 
 #endif
 }
@@ -308,58 +310,58 @@ void setupBluetoothLE(void)
 		error(F("Could not add pool service"));
 	}
 
-	waterTempId = gatt.addCharacteristic(waterTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	waterTempId = gatt.addCharacteristic(waterTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (waterTempId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	airTempId = gatt.addCharacteristic(airTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	airTempId = gatt.addCharacteristic(airTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if(!airTempId)
 	{
 		error(F("Could not add characteristic"));
 	}
 
-	humidityId = gatt.addCharacteristic(humidityCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	humidityId = gatt.addCharacteristic(humidityCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (humidityId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	waterLevelId = gatt.addCharacteristic(waterLevelCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	waterLevelId = gatt.addCharacteristic(waterLevelCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (waterLevelId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	flowSwitchId = gatt.addCharacteristic(flowSwitchCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	flowSwitchId = gatt.addCharacteristic(flowSwitchCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (flowSwitchId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	uvIndexId = gatt.addCharacteristic(uvIndexCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	uvIndexId = gatt.addCharacteristic(uvIndexCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (uvIndexId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	visId = gatt.addCharacteristic(visCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	visId = gatt.addCharacteristic(visCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (visId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	irId = gatt.addCharacteristic(irCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	irId = gatt.addCharacteristic(irCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (irId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	pumpSpeedId = gatt.addCharacteristic(pumpSpeedUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	pumpSpeedId = gatt.addCharacteristic(pumpSpeedUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (pumpSpeedId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	pumpSpeedCmdId = gatt.addCharacteristic(pumpSpeedCmdUUID, GATT_CHARS_PROPERTIES_WRITE, 1, 1, BLE_DATATYPE_BYTEARRAY);
+	pumpSpeedCmdId = gatt.addCharacteristic(pumpSpeedCmdUUID, GATT_CHARS_PROPERTIES_WRITE | GATT_CHARS_PROPERTIES_READ, 1, 1, BLE_DATATYPE_BYTEARRAY);
 	if (pumpSpeedCmdId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	errorId = gatt.addCharacteristic(errorUUID, GATT_CHARS_PROPERTIES_NOTIFY, 8, 8, BLE_DATATYPE_BYTEARRAY);
+	errorId = gatt.addCharacteristic(errorUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
 	if (errorId == 0) {
 		error(F("Could not add characteristic"));
 	}
@@ -369,12 +371,12 @@ void setupBluetoothLE(void)
 	{
 		error(F("Could not add pool service"));
 	}
-	timeId = gatt.addCharacteristic(timeCharUUID, GATT_CHARS_PROPERTIES_NOTIFY, 4, 4, BLE_DATATYPE_BYTEARRAY);
+	timeId = gatt.addCharacteristic(timeCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
 	if (timeId == 0) {
 		error(F("Could not add characteristic"));
 	}
 
-	timeCmdId = gatt.addCharacteristic(timeCmdCharUUID, GATT_CHARS_PROPERTIES_WRITE, 4, 4, BLE_DATATYPE_BYTEARRAY);
+	timeCmdId = gatt.addCharacteristic(timeCmdCharUUID, GATT_CHARS_PROPERTIES_WRITE | GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
 	if (timeCmdId == 0) {
 		error(F("Could not add characteristic"));
 	}
@@ -387,6 +389,7 @@ void setupBluetoothCallbacks(void)
   /* Set callbacks */
   ble.setBleUartRxCallback(BleUartRX);
   ble.setBleGattRxCallback(pumpSpeedCmdId, BleGattRX);
+  ble.setBleGattRxCallback(timeCmdId, BleGattRX);
 }
 
 void BleUartRX(char data[], uint16_t len)
@@ -432,7 +435,7 @@ void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
 		t |= data[2] << 8;
 		t |= data[3];
 		Serial.println(t, HEX);
-		DateTime new_time(t)	
+		DateTime new_time(t);	
 		rtc.adjust(new_time);
 	}
 }
@@ -482,7 +485,20 @@ float getOneWireTemp(DallasTemperature sensor, DeviceAddress address)
   return tempC;
 }
 
-void setChar(int32_t gattID, uint32_t timestamp, int32_t val)
+void setChar16(int32_t gattID, int32_t val)
+{
+  uint8_t _val[4];
+  int i;
+
+  _val[0] = (val >> 24) & 0xFF;
+  _val[1] = (val >> 16) & 0xFF;
+  _val[2] = (val >> 8) & 0xFF;
+  _val[3] = val & 0xFF;
+
+  gatt.setChar(gattID, _val, 4);
+}
+
+void setChar32(int32_t gattID, uint32_t timestamp, int32_t val)
 {
   uint8_t _val[8];
   int i;
@@ -527,15 +543,16 @@ int32_t getWaterSensorLevel(void)
 
 void setupClock(void)
 { 
-  if(!rtc.begin()) {
-    error(F("Couldn't find RTC"));
-  }
+	if(!rtc.begin()) {
+		error(F("Couldn't find RTC"));
+	}
 
-  if (rtc.lostPower()) {
-    Serial.println(F("RTC lost power, setting time from compilation time of sketch."));
-    // following line sets the RTC to the date & time this sketch was compiled
-	rtc.adjust(compile_time + TimeSpan(0, UTC_TIME_OFFSET, 0, 0));
-  }
+	if (rtc.lostPower()) {
+		Serial.println(F("RTC lost power, setting time from compilation time of sketch."));
+		// following line sets the RTC to the date & time this sketch was compiled
+		DateTime compile_time = DateTime(F(__DATE__), F(__TIME__));
+		rtc.adjust(compile_time + TimeSpan(0, UTC_TIME_OFFSET, 0, 0));
+	}
 }
 
 void setPumpSpeed(int speed)
