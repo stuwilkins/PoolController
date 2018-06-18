@@ -34,26 +34,16 @@
 #include <RTClib.h>
 
 #include "PoolController.h"
-#define MINIMUM_FIRMWARE_VERSION   "0.7.0"
+#include "timer.h"
 
 // One Wire Bus Definition
-#define ONE_WIRE_BUS 1
 OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature oneWireSensors(&oneWire);
 DeviceAddress waterThermometer = {0x28, 0x8F, 0x3B, 0xE1, 0x08, 0x00, 0x00, 0xC7};
  
-// Analog input for level meter
-#define WATER_LEVEL_PIN			A0
-#define WATER_LEVEL_X     		79.69
-#define WATER_LEVEL_C     		-36455
-
-// Other digital pins
-#define OUTPUT_LED_L			13
-#define FLOW_SWITCH       		0
-#define PUMP_STOP_BIT     		10
-#define PUMP_BIT_0        		9
-#define PUMP_BIT_1        		6
-#define PUMP_BIT_2        		5
+// Create the bluefruit object
+Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
+Adafruit_BLEGatt  gatt = Adafruit_BLEGatt(ble);
 
 // Setup other sensors
 Adafruit_HTU21DF htu = Adafruit_HTU21DF();
@@ -61,22 +51,6 @@ Adafruit_SI1145 uv = Adafruit_SI1145();
 
 // Realtime Clock (RTClib)
 RTC_DS3231 rtc;
-#define UTC_TIME_OFFSET	        4
-//const char daysOfTheWeek_0[12] PROGMEM = "Sunday";
-//const char daysOfTheWeek_1[12] PROGMEM = "Monday";
-//const char daysOfTheWeek_2[12] PROGMEM = "Tuesday";
-//const char daysOfTheWeek_3[12] PROGMEM = "Wednesday";
-//const char daysOfTheWeek_4[12] PROGMEM = "Thursday";
-//const char daysOfTheWeek_5[12] PROGMEM = "Friday";
-//const char daysOfTheWeek_6[12] PROGMEM = "Saturday";
-//const char* const daysOfTheWeek[] PROGMEM = {daysOfTheWeek_0,
-//                                           daysOfTheWeek_1,
-//                                           daysOfTheWeek_2,
-//                                           daysOfTheWeek_3,
-//                                           daysOfTheWeek_4,
-//                                           daysOfTheWeek_5,
-//                                           daysOfTheWeek_6};
-
 
 /* The service information */
 
@@ -99,15 +73,9 @@ int32_t errorId;
 // Error information
 int8_t error_count = 0;
 
-// Create the bluefruit object
-Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
-Adafruit_BLEGatt  gatt = Adafruit_BLEGatt(ble);
-
 // Enable for debug
 #define DEBUG
 
-// Pump Speeds
-uint16_t pumpSpeeds[] = {0, 600, 1075, 1550, 2025, 2500, 2975, 3450};
 
 // Error handler which pauses and flashes the L led. 
 void error(const __FlashStringHelper*err) {
