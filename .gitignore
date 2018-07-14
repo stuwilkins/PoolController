@@ -3,3 +3,5 @@ keys.py
 build
 *.swp
 .DS_Store
+*.swo
+auth.h
