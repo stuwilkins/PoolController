@@ -24,15 +24,17 @@
 #include <OneWire.h>
 #include <DallasTemperature.h>
 #include <avr/pgmspace.h>
+#include <WiFi101.h>
+#include <WiFi101OTA.h>
+#include <Adafruit_MQTT.h>
+#include <Adafruit_MQTT_Client.h>
+#include <Adafruit_SleepyDog.h>
 #include <Adafruit_HTU21DF.h>
 #include <Adafruit_SI1145.h>
-#include <Adafruit_ATParser.h>
-#include <Adafruit_BluefruitLE_SPI.h>
-#include <Adafruit_BLEGatt.h>
-#include <Adafruit_BLE.h>
-#include <Adafruit_BluefruitLE_UART.h>
 #include <RTClib.h>
+#include "eeprom_i2c.h"
 
+#include "auth.h"
 #include "PoolController.h"
 #include "timer.h"
 
@@ -41,10 +43,6 @@ OneWire oneWire(ONE_WIRE_BUS);
 DallasTemperature oneWireSensors(&oneWire);
 DeviceAddress waterThermometer = {0x28, 0x8F, 0x3B, 0xE1, 0x08, 0x00, 0x00, 0xC7};
  
-// Create the bluefruit object
-Adafruit_BluefruitLE_SPI ble(BLUEFRUIT_SPI_CS, BLUEFRUIT_SPI_IRQ, BLUEFRUIT_SPI_RST);
-Adafruit_BLEGatt  gatt = Adafruit_BLEGatt(ble);
-
 // Setup other sensors
 Adafruit_HTU21DF htu = Adafruit_HTU21DF();
 Adafruit_SI1145 uv = Adafruit_SI1145();
@@ -52,30 +50,39 @@ Adafruit_SI1145 uv = Adafruit_SI1145();
 // Realtime Clock (RTClib)
 RTC_DS3231 rtc;
 
-/* The service information */
+// EEPROM
+EEProm_I2C eeprom = EEProm_I2C(0x50);
 
-int32_t environmentServiceId;
-int32_t timeServiceId;
-int32_t waterTempId;
-int32_t airTempId;
-int32_t humidityId;
-int32_t waterLevelId;
-int32_t flowSwitchId;
-int32_t uvIndexId;
-int32_t visId;
-int32_t irId;
-int32_t timeId;
-int32_t timeCmdId;
-int32_t pumpSpeedId;
-int32_t pumpSpeedCmdId;
-int32_t errorId;
+// WIFI and MQTT setup
+WiFiClient wifi_client;
+WiFiServer wifi_server(8000);
+Adafruit_MQTT_Client mqtt_client(&wifi_client, "192.168.1.2", 1883, "", "");
 
-// Error information
-int8_t error_count = 0;
+Adafruit_MQTT_Publish mqtt_water_temp = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/water_temp", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_air_temp = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/air_temp", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_air_humidity = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/air_humidity", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_water_level = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/water_level", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_flow_switch = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/flow_switch", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_uv_index = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/uv_index", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_vis = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/vis_light", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_ir = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/ir_light", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_pump_speed = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/pump_speed", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_error = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/error", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_pump_pressure = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/pump_pressure", MQTT_QOS_1);
+Adafruit_MQTT_Publish mqtt_pump_flow = Adafruit_MQTT_Publish(&mqtt_client, "homeauto/pool/pump_flow", MQTT_QOS_1);
+
+Adafruit_MQTT_Subscribe mqtt_pump_speed_cmd = Adafruit_MQTT_Subscribe(&mqtt_client, "homeauto/pool/pump_speed_cmd");
+Adafruit_MQTT_Subscribe mqtt_set_time_cmd = Adafruit_MQTT_Subscribe(&mqtt_client, "homeauto/pool/set_time_cmd");
+
+// Data Readings
+DataReadings sensor_readings;
+DateTime last;
+
+// ISR Data
+volatile PumpFlowRate pump_flow;
 
 // Enable for debug
 #define DEBUG
-
 
 // Error handler which pauses and flashes the L led. 
 void error(const __FlashStringHelper*err) {
@@ -87,429 +94,385 @@ void error(const __FlashStringHelper*err) {
   }
 }
 
+// ISR Routines for flow rate meters
+
+void pump_flow_ISR()
+{
+	if (millis() - pump_flow.last > PUMP_FLOW_BOUNCE)
+	{
+		pump_flow.last = millis();
+		pump_flow.clicks++;
+	}
+}
+
 void setup() {
-  // Set digital pins 
-  pinMode(OUTPUT_LED_L, OUTPUT);   
-  pinMode(PUMP_STOP_BIT, OUTPUT);  
-  pinMode(PUMP_BIT_0, OUTPUT);  
-  pinMode(PUMP_BIT_1, OUTPUT);
-  pinMode(PUMP_BIT_2, OUTPUT);
-  pinMode(FLOW_SWITCH, INPUT_PULLUP);
-  boolean success;
+	// Set digital pins 
 
-  Serial.begin(115200);
+	pinMode(OUTPUT_LED_L, OUTPUT);   
+	pinMode(PUMP_STOP_BIT, OUTPUT);  
+	pinMode(PUMP_BIT_0, OUTPUT);  
+	pinMode(PUMP_BIT_1, OUTPUT);
+	pinMode(PUMP_BIT_2, OUTPUT);
+	pinMode(FLOW_SWITCH, INPUT_PULLUP);
+	pinMode(PUMP_FLOW_BIT, INPUT_PULLUP);
 
-  int i = 0;
-  for(i=0;i<100;i++)
-  {
-    digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-	delay(100);
-  }
+	Serial.begin(115200);
 
-  // Set digital pins 
-  pinMode(OUTPUT_LED_L, OUTPUT);   
-  pinMode(PUMP_STOP_BIT, OUTPUT);  
-  pinMode(PUMP_BIT_0, OUTPUT);  
-  pinMode(PUMP_BIT_1, OUTPUT);
-  pinMode(PUMP_BIT_2, OUTPUT);
-  pinMode(FLOW_SWITCH, INPUT_PULLUP);
+	int i = 0;
+	for(i=0;i<100;i++)
+	{
+		digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
+		delay(100);
+	}
 
-  // Set the L led hight to show we are configuring
-  digitalWrite(OUTPUT_LED_L, HIGH);
-  // Stop the pump
-  setPumpSpeed(0);
-  
-  delay(5000);
+	// Set the L led hight to show we are configuring
+	digitalWrite(OUTPUT_LED_L, HIGH);
 
-  setupBluetooth();
-  setupBluetoothLE();
-  setupBluetoothCallbacks();
+	int countdownMS = Watchdog.enable(WATCHDOG_TIME);
+	Serial.print("Enabled the watchdog with max countdown of ");
+	Serial.print(countdownMS, DEC);
+	Serial.println(" milliseconds!");
+	Serial.println();
 
-  // Setup Sensors
-  setupSensors();
+	// Setup Sensors
+	Serial.println(F("Setup Sensors ...."));
+	setupSensors();
+	Watchdog.reset();  // Pet the dog!
 
-  // Setup RTC
-  setupClock();
-  
-  // Set L low to show we are initialized.
-  digitalWrite(OUTPUT_LED_L, LOW);
+	// Setup RTC
+	Serial.println(F("Setup RTC ...."));
+	setup_clock();
+	Watchdog.reset();  // Pet the dog!
+
+	// Setup eeprom
+	Serial.println(F("Setup eeprom ...."));
+	eeprom.begin();
+
+	// Setup WIFI
+
+	Serial.println(F("Setup WIFI ...."));
+	setup_wifi();
+	wifi_connect();
+	Watchdog.reset();  // Pet the dog!
+
+	Serial.println(F("Setup MQTT ...."));
+	mqtt_client.subscribe(&mqtt_pump_speed_cmd);
+	mqtt_client.subscribe(&mqtt_set_time_cmd);
+	mqtt_connect();
+	Watchdog.reset();  // Pet the dog!
+
+	// Now restore from memory
+	eeprom_restore();
+
+	// Set defaults
+	sensor_readings.error_count = 0;
+	pump_flow.last = millis();
+	pump_flow.clicks = 0;
+
+	// Setup ISR
+	attachInterrupt(digitalPinToInterrupt(PUMP_FLOW_PIN), 
+					pump_flow_ISR, RISING);	
+
+	// Set L low to show we are initialized.
+	digitalWrite(OUTPUT_LED_L, LOW);
+}
+
+void eeprom_restore(void)
+{
+	uint8_t pump_speed;
+	eeprom.read(EEPROM_PUMP_SPEED, &pump_speed, 1);
+	Serial.print(F("EEPROM Pump speed = "));
+	Serial.println(pump_speed);
+	set_pump_speed(pump_speed);
 }
 
 void loop() {
-  readSensors();
-  ble.update(1000);
-  delay(2000);
+	DateTime now;
+	unsigned long start_millis = millis();
+
+	// Pet the dog!
+	Watchdog.reset();
+
+	// Do WIFI and MQTT Connection
+	wifi_connect();
+	mqtt_connect();
+
+	// Poll for over the air updates
+	WiFiOTA.poll();
+
+	// Poll for MQTT updates
+	mqtt_poll(100);
+
+	// Read the current time
+	now = rtc.now();
+
+	if(now.second() != last.second())
+	{
+		if((now.second() % 5) == 0)
+		{
+			// Flash the L led
+			digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
+
+			// We have a new second
+			// Read pool sensors
+			read_sensors(&sensor_readings);
+
+			print_readings(&sensor_readings);
+
+			// Publish with MQTT
+			publish_readings(&sensor_readings, now.unixtime());
+		}
+	}
+
+	if(now.hour() != last.hour())
+	{
+		// We have a new hour
+		if((now.hour() % 6) == 0)
+		{
+			// We should now stop and start the pump to maintain prime
+			set_pump_stop(1);
+			delay(2000);
+			set_pump_stop(0);
+
+			
+		}
+	}
+	// Store last time
+	last = now;
 }
 
-void readSensors(void)
+void read_sensors(DataReadings *readings)
 {
-	float waterTemp = 0;
-	float airTemp = 0;
-	float humidity = 0;
-	float waterLevel = 0;
-	int32_t uvIndex = 0, vis = 0, ir = 0;
-	int32_t flowSwitch = 0;
-	int32_t pumpSpeed = 0;
-	int32_t _now = 0;
 	bool error = false;
 
-	digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-	waterTemp = getOneWireTemp(oneWireSensors, waterThermometer);
-	airTemp = htu.readTemperature();
-	humidity = htu.readHumidity();
-	uvIndex = uv.readUV();
-	vis = uv.readVisible();
-	ir = uv.readIR();
-	waterLevel = getWaterSensorLevel();
-	_now = rtc.now().unixtime();
-	flowSwitch = !digitalRead(FLOW_SWITCH);
-	pumpSpeed = getPumpSpeed();
+	readings->water_temp = get_one_wire_temp(oneWireSensors, waterThermometer);
 
-	if((uvIndex == 0) &&
-			(vis == 0) && (ir == 0))
+	//readings->air_temp = htu.readTemperature();
+	//readings->air_humidity = htu.readHumidity();
+
+	readings->uv_index = uv.readUV();
+	readings->vis = uv.readVisible();
+	readings->ir = uv.readIR();
+	
+	readings->water_level = get_water_sensor_level();
+	readings->pump_pressure = get_pump_pressure();
+	readings->flow_switch = !digitalRead(FLOW_SWITCH);
+	readings->pump_speed = get_pump_speed();
+	readings->pump_flow = get_pump_flow();
+
+	if((readings->uv_index == 0) &&
+			(readings->vis == 0) && 
+			(readings->ir == 0))
 	{
-		error_count++;
+		readings->error_count++;
 		uv.begin();
 	}
+}
 
-	setChar32(waterTempId, _now, (int32_t)(waterTemp * 1000));  
-	setChar32(airTempId, _now, (int32_t)(airTemp * 1000));
-	setChar32(humidityId, _now, (int32_t)(humidity * 1000));
-	setChar32(waterLevelId, _now, (int32_t)(waterLevel * 1000));
-	setChar32(flowSwitchId, _now, (int32_t)(flowSwitch));
-	setChar32(uvIndexId, _now, (int32_t)(uvIndex));
-	setChar32(visId, _now, (int32_t)(vis));
-	setChar32(irId, _now, (int32_t)(ir));
+int32_t get_pump_flow(void)
+{
+	// Get current values
+	long int delta = millis() - pump_flow.last_read;
+	long int clicks = pump_flow.clicks;
 
-	if((pumpSpeed > 1) && (flowSwitch == 1))
-	{
-		setChar32(pumpSpeedId, _now, (int32_t)pumpSpeeds[pumpSpeed]); 
-	} else {
-		setChar32(pumpSpeedId, _now, 0);
-		error = true;
-	}
+	// Zero values
+	pump_flow.clicks = 0;
+	pump_flow.last_read = millis();
 
-	setChar32(errorId, _now, (int32_t)error_count);
-	setChar16(timeId, _now);
+	float _flow = (float)clicks / (float)delta;
 
 #ifdef DEBUG
+	Serial.print(F("Pump flow freq (clicks.ms^-1) = "));
+	Serial.println(_flow);
+#endif
+
+	_flow = _flow * PUMP_FLOW_F_TO_Q;
+	_flow = _flow * LPM_TO_GPM;
+
+	int32_t _int_flow = (int32_t)(_flow * 1000);
+	return _int_flow;
+}	
+
+void publish_readings(DataReadings *readings, uint32_t now)
+{
+
+	mqtt_publish_data(&mqtt_water_temp, now, (int32_t)(readings->water_temp * 1000));  
+	mqtt_publish_data(&mqtt_air_temp, now, (int32_t)(readings->air_temp * 1000));
+	mqtt_publish_data(&mqtt_air_humidity, now, (int32_t)(readings->air_humidity * 1000));
+	mqtt_publish_data(&mqtt_water_level, now, (int32_t)(readings->water_level * 1000));
+	mqtt_publish_data(&mqtt_flow_switch, now, (int32_t)(readings->flow_switch));
+	mqtt_publish_data(&mqtt_uv_index, now, (int32_t)(readings->uv_index));
+	mqtt_publish_data(&mqtt_vis, now, (int32_t)(readings->vis));
+	mqtt_publish_data(&mqtt_ir, now, (int32_t)(readings->ir));
+	mqtt_publish_data(&mqtt_pump_pressure, now, (int32_t)(readings->pump_pressure));
+	mqtt_publish_data(&mqtt_pump_flow, now, (int32_t)(readings->pump_flow));
+
+	if((readings->pump_speed > 1) && (readings->flow_switch == 1))
+	{
+		mqtt_publish_data(&mqtt_pump_speed, now, (int32_t)pumpSpeeds[readings->pump_speed]); 
+	} else {
+		mqtt_publish_data(&mqtt_pump_speed, now, 0);
+	}
+
+	mqtt_publish_data(&mqtt_error, now, (int32_t)readings->error_count);
+}
+
+void print_readings(DataReadings *readings)
+{
+
     Serial.print(F("Water Temp : "));
-    Serial.print(waterTemp);
-    Serial.print(F(" degC\t\t"));
+    Serial.print(readings->water_temp);
+    Serial.println(F(" degC\t\t"));
     Serial.print(F("Air Temperature "));
-    Serial.print(airTemp);
-    Serial.print(F(" degC\t\t"));
-    Serial.print(F("Humidity "));
-    Serial.print(humidity);
-    Serial.print(F("%\t\t"));
+    Serial.print(readings->air_temp);
+    Serial.println(F(" degC\t\t"));
+    Serial.print(F("Air Humidity "));
+    Serial.print(readings->air_humidity);
+    Serial.println(F("%\t\t"));
     Serial.print(F("Water Level "));
-    Serial.print(waterLevel);
-    Serial.print(F("%\t\t"));
+    Serial.print(readings->water_level);
+    Serial.println(F("%\t\t"));
     Serial.print(F("Flow "));
 
-    if(flowSwitch)
+    if(readings->flow_switch)
     {
         Serial.print(F("ON "));
     } else {
         Serial.print(F("OFF"));
     }
 
-    Serial.print(F("\t\t"));
-    Serial.print(F(" UV "));
-    Serial.print(((float)uvIndex) / 100);
-    Serial.print(F("\t\t"));
-    Serial.print(F(" VIS "));
-    Serial.print(vis);
-    Serial.print(F("\t\t"));
-    Serial.print(F(" IR "));
-    Serial.print(ir);
-    Serial.print(F("\t\t"));
-    Serial.print(F(" Speed "));
-    Serial.print(pumpSpeed);
+    Serial.println("");
+    Serial.print(F("UV "));
+    Serial.print(((float)readings->uv_index) / 100);
+    Serial.println("");
+    Serial.print(F("VIS "));
+    Serial.print(readings->vis);
+    Serial.println("");
+    Serial.print(F("IR "));
+    Serial.print(readings->ir);
+    Serial.println("");
+    Serial.print(F("Speed "));
+    Serial.print(readings->pump_speed);
     Serial.print(F(" "));
-    Serial.print(pumpSpeeds[pumpSpeed]);
+    Serial.println(pumpSpeeds[readings->pump_speed]);
+	Serial.print(F("Pump Flow Rate "));
+	Serial.print(readings->pump_flow);
+	Serial.println(F(" *1000 GPM"));
 
-    Serial.println("");
-
-    Serial.print(F("Time = 0x"));
-    Serial.print(_now, HEX);
-    Serial.println("");
-
-#endif
-}
-
-void setupBluetooth(void)
-{
-  if (!ble.begin(VERBOSE_MODE))
-  {
-    error(F("Couldn't find Bluefruit\n"));
-  }
-
-  if (! ble.factoryReset() ){
-    error(F("Couldn't factory reset\n"));
-  }
-
-  // Disable command echo from Bluefruit
-  ble.echo(false);
-  ble.verbose(false);
-
-  // Set name of device
-  if (!ble.sendCommandCheckOK(F("AT+GAPDEVNAME=Pool Controller")))
-    {
-    error(F("Could not set device name."));
-  }
-
-  if (!ble.sendCommandCheckOK(F("AT+BLEPOWERLEVEL=4")))
-    {
-    error(F("Could not set output power"));
-  }
-
-  if (!ble.sendCommandCheckOK(F("AT+HWMODELED=SPI")) ){
-    error(F("Could not set led output"));
-  }
-}
-
-void setupBluetoothLE(void)
-{
-
-	environmentServiceId = gatt.addService(environmentServiceUUID);
-	if(!environmentServiceId)
-	{
-		error(F("Could not add pool service"));
-	}
-
-	waterTempId = gatt.addCharacteristic(waterTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (waterTempId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	airTempId = gatt.addCharacteristic(airTempCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if(!airTempId)
-	{
-		error(F("Could not add characteristic"));
-	}
-
-	humidityId = gatt.addCharacteristic(humidityCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (humidityId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	waterLevelId = gatt.addCharacteristic(waterLevelCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (waterLevelId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	flowSwitchId = gatt.addCharacteristic(flowSwitchCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (flowSwitchId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	uvIndexId = gatt.addCharacteristic(uvIndexCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (uvIndexId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	visId = gatt.addCharacteristic(visCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (visId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	irId = gatt.addCharacteristic(irCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (irId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	pumpSpeedId = gatt.addCharacteristic(pumpSpeedUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (pumpSpeedId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	pumpSpeedCmdId = gatt.addCharacteristic(pumpSpeedCmdUUID, GATT_CHARS_PROPERTIES_WRITE | GATT_CHARS_PROPERTIES_READ, 1, 1, BLE_DATATYPE_BYTEARRAY);
-	if (pumpSpeedCmdId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	errorId = gatt.addCharacteristic(errorUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 8, 8, BLE_DATATYPE_BYTEARRAY);
-	if (errorId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	timeServiceId = gatt.addService(timeServiceUUID);
-	if(!timeServiceId)
-	{
-		error(F("Could not add pool service"));
-	}
-	timeId = gatt.addCharacteristic(timeCharUUID, GATT_CHARS_PROPERTIES_NOTIFY | GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
-	if (timeId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	timeCmdId = gatt.addCharacteristic(timeCmdCharUUID, GATT_CHARS_PROPERTIES_WRITE | GATT_CHARS_PROPERTIES_READ, 4, 4, BLE_DATATYPE_BYTEARRAY);
-	if (timeCmdId == 0) {
-		error(F("Could not add characteristic"));
-	}
-
-	ble.reset();
-}
-
-void setupBluetoothCallbacks(void)
-{
-  /* Set callbacks */
-  ble.setBleUartRxCallback(BleUartRX);
-  ble.setBleGattRxCallback(pumpSpeedCmdId, BleGattRX);
-  ble.setBleGattRxCallback(timeCmdId, BleGattRX);
-}
-
-void BleUartRX(char data[], uint16_t len)
-{
-  Serial.print( F("[BLE UART RX]" ) );
-  Serial.write(data, len);
-  Serial.println();
-}
-
-void BleGattRX(int32_t chars_id, uint8_t data[], uint16_t len)
-{
-	Serial.print(F("Gatt Callback chars_id = "));
-	Serial.print(chars_id);
-	Serial.print(F(" "));
-	Serial.print(F("len = "));
-	Serial.println(len);
-
-	if(chars_id == pumpSpeedCmdId)
-	{  
-		if(len != 1)
-		{
-			Serial.println(F("Error setting pump speed"));
-			return;
-		}
-
-		Serial.print("Setting pump speed to ");
-		Serial.println(data[0]);
-		setPumpSpeed(data[0]);
-
-	} else if(chars_id == timeCmdId) {
-		
-		if(len != 4)
-		{
-			Serial.println(F("Invalid time data"));
-			return;
-		}
-
-		// Set time	
-		Serial.print(F("Setting time to "));
-		uint32_t t = 0x00000000;
-		t |= data[0] << 24;
-		t |= data[1] << 16;
-		t |= data[2] << 8;
-		t |= data[3];
-		Serial.println(t, HEX);
-		DateTime new_time(t);	
-		rtc.adjust(new_time);
-	}
 }
 
 void setupSensors(void)
 {
-  // Setup HTU21D-F
-  
-  if (!htu.begin()) {
-    error(F("Could not find HTU21D-F"));
-  }
+	// Setup HTU21D-F
 
-  // Setup SI1145
-  if(!uv.begin()) {
-    error(F("Could not find SI1145"));
-  }
+	//if (!htu.begin()) {
+	//	error(F("Could not find HTU21D-F"));
+	//}
 
-  // Setup 1-Wire sensors
+	// Setup SI1145
+	if(!uv.begin()) {
+		error(F("Could not find SI1145"));
+	}
 
-  oneWireSensors.begin();
-  
-  Serial.print(F("Found "));
-  Serial.print(oneWireSensors.getDeviceCount(), DEC);
-  Serial.println(F(" device\(s\)."));
-  
-  Serial.print("OneWire Parasitic power is: "); 
-  if (oneWireSensors.isParasitePowerMode())
-  {
-    Serial.println(F("ON"));
-  } else {
-    Serial.println(F("OFF"));
-  }
+	// Setup 1-Wire sensors
 
-  int c = 0;
-  if(!oneWire.search(waterThermometer))
-  {
-    error(F("Unable to find address for waterThermometer"));
-  }
+	oneWireSensors.begin();
 
-  oneWireSensors.setResolution(waterThermometer, 12);
+	Serial.print(F("Found "));
+	Serial.print(oneWireSensors.getDeviceCount(), DEC);
+	Serial.println(F(" device\(s\)."));
+
+	Serial.print("OneWire Parasitic power is: "); 
+	if (oneWireSensors.isParasitePowerMode())
+	{
+		Serial.println(F("ON"));
+	} else {
+		Serial.println(F("OFF"));
+	}
+
+	int c = 0;
+	if(!oneWire.search(waterThermometer))
+	{
+		error(F("Unable to find address for waterThermometer"));
+	}
+
+	oneWireSensors.setResolution(waterThermometer, 12);
 }
 
-float getOneWireTemp(DallasTemperature sensor, DeviceAddress address)
+float get_one_wire_temp(DallasTemperature sensor, DeviceAddress address)
 {
-  oneWireSensors.requestTemperatures();
-  float tempC = sensor.getTempC(address);
-  return tempC;
+	oneWireSensors.requestTemperatures();
+	float tempC = sensor.getTempC(address);
+	return tempC;
 }
 
-void setChar16(int32_t gattID, int32_t val)
+int32_t get_water_sensor_level(void)
 {
-  uint8_t _val[4];
-  int i;
+	uint64_t sum = 0;
+	int32_t val;
+	int i;
 
-  _val[0] = (val >> 24) & 0xFF;
-  _val[1] = (val >> 16) & 0xFF;
-  _val[2] = (val >> 8) & 0xFF;
-  _val[3] = val & 0xFF;
+	for(i=0;i<100;i++)
+	{
+		sum += analogRead(WATER_LEVEL_PIN);
+		delay(1);
+	}
 
-  gatt.setChar(gattID, _val, 4);
-}
+	val = (int32_t)(sum / 100);
 
-void setChar32(int32_t gattID, uint32_t timestamp, int32_t val)
-{
-  uint8_t _val[8];
-  int i;
-
-  _val[4] = (val >> 24) & 0xFF;
-  _val[5] = (val >> 16) & 0xFF;
-  _val[6] = (val >> 8) & 0xFF;
-  _val[7] = val & 0xFF;
-
-  _val[0] = (timestamp >> 24) & 0xFF;
-  _val[1] = (timestamp >> 16) & 0xFF;
-  _val[2] = (timestamp >> 8) & 0xFF;
-  _val[3] = timestamp & 0xFF;
-
-  gatt.setChar(gattID, _val, 8);
-}
-
-int32_t getWaterSensorLevel(void)
-{
-  uint64_t sum = 0;
-  int32_t val;
-  int i;
-  
-  for(i=0;i<100;i++)
-  {
-    sum += analogRead(WATER_LEVEL_PIN);
-    delay(1);
-  }
-
-  val = (int32_t)(sum / 100);
-
-  // Now do conversion
+	// Now do conversion
 #ifdef DEBUG
-    Serial.print(F("ADC Value = "));
-    Serial.println(val);
+	Serial.print(F("Water Level ADC Value = "));
+	Serial.println(val);
 #endif
 
-  val = (val * WATER_LEVEL_X) + WATER_LEVEL_C;
-  
-  return val;
+	val = (val * WATER_LEVEL_X) + WATER_LEVEL_C;
+
+	return val;
 }
 
-void setupClock(void)
+int32_t get_pump_pressure(void)
+{
+	uint64_t sum = 0;
+	int32_t val;
+	int i;
+
+	for(i=0;i<100;i++)
+	{
+		sum += analogRead(PUMP_PRESSURE_PIN);
+		delay(1);
+	}
+
+	val = (int32_t)(sum / 100);
+
+#ifdef DEBUG
+	Serial.print(F("Pressure ADC Value = "));
+	Serial.println(val);
+#endif
+
+	// Now do conversion
+	float _val = 3300 * (float)val;
+	_val = 2 * _val / 1023;
+
+#ifdef DEBUG
+	Serial.print(F("Pressure Sensor Voltage = "));
+	Serial.println(_val);
+#endif
+	_val = _val - 335; // Zero point offset
+	_val = _val * 75;
+
+	val = (int32_t)_val;
+
+#ifdef DEBUG
+	Serial.print(F("Pressure Value = "));
+	Serial.print(val);
+	Serial.println(F(" uPSI"));
+#endif
+
+	return val;
+}
+
+void setup_clock(void)
 { 
 	if(!rtc.begin()) {
 		error(F("Couldn't find RTC"));
@@ -523,26 +486,194 @@ void setupClock(void)
 	}
 }
 
-void setPumpSpeed(int speed)
+void set_pump_speed(uint8_t speed)
 {
-    // First stop the pump
-    digitalWrite(PUMP_STOP_BIT, 1);
-    delay(1000);
+	// First stop the pump
+	//digitalWrite(PUMP_STOP_BIT, 1);
+	//delay(1000);
 
-    digitalWrite(PUMP_BIT_0, speed & 0x1);
-    digitalWrite(PUMP_BIT_1, speed & 0x2);
-    digitalWrite(PUMP_BIT_2, speed & 0x4);
-    delay(1000);
+	digitalWrite(PUMP_BIT_0, speed & 0x1);
+	digitalWrite(PUMP_BIT_1, speed & 0x2);
+	digitalWrite(PUMP_BIT_2, speed & 0x4);
+	//delay(1000);
 
-    // Restart the pump
-    digitalWrite(PUMP_STOP_BIT, 0);
+	// Restart the pump
+	//digitalWrite(PUMP_STOP_BIT, 0);
+
+	// Now store the pump speed in EEPROM
+	eeprom.write(EEPROM_PUMP_SPEED, (uint8_t *)(&speed), 1); // Store only 1 byte
 }
 
-int getPumpSpeed(void)
+void set_pump_stop(bool stop)
 {
-    int bits = 0;
-    bits |= digitalRead(PUMP_BIT_0);
-    bits |= (digitalRead(PUMP_BIT_1) << 1);
-    bits |= (digitalRead(PUMP_BIT_2) << 2);
-    return bits;
+	digitalWrite(PUMP_STOP_BIT, stop);
+	eeprom.write(EEPROM_PUMP_STOP, (uint8_t *)(&stop), 1); // Store only 1 byte
+}
+
+int get_pump_speed(void)
+{
+	int bits = 0;
+	bits |= digitalRead(PUMP_BIT_0);
+	bits |= (digitalRead(PUMP_BIT_1) << 1);
+	bits |= (digitalRead(PUMP_BIT_2) << 2);
+	return bits;
+}
+
+void setup_wifi(void)
+{
+
+	WiFi.setPins(8,7,4,2);
+	if (WiFi.status() == WL_NO_SHIELD) {
+		error(F("WiFi module not present"));
+	}
+
+	Watchdog.reset();
+	Serial.println(F("Waiting 5s for descovery of networks"));
+	delay(5000);
+	
+	Watchdog.reset();
+	wifi_list_networks();
+
+	Watchdog.reset();
+}
+
+void wifi_connect() {
+
+	if(WiFi.status() == WL_CONNECTED)
+	{
+		return;
+	}
+
+	Watchdog.disable();
+
+	int tries = 50;
+	while(WiFi.status() != WL_CONNECTED)
+	{
+		Serial.print(F("Attempting to connect to WPA SSID: "));
+		Serial.println(wifi_ssid);
+		WiFi.begin(wifi_ssid, wifi_password);
+		if(--tries == 0)
+		{
+			Serial.println(F("Enabling watchdog"));
+			Watchdog.enable(WATCHDOG_TIME);
+		}
+		delay(5000);
+	}
+	
+	Serial.println(F("Waiting 10s for WIFI to connect"));
+	delay(10000);
+
+	// start the WiFi OTA library with SD based storage
+	Serial.println(F("Setup OTA Programming ....."));
+	WiFiOTA.begin(OTA_CONNECTION_NAME, ota_password, InternalStorage);
+
+	// Start telnet port server
+	wifi_server.begin();
+
+	// Re-enable the watchdog
+	Watchdog.enable(WATCHDOG_TIME);
+}
+
+void mqtt_connect() {
+
+	if(mqtt_client.connected())
+	{
+		return;
+	}
+
+	Serial.println(F("Connecting to MQTT Server ....."));
+
+	Watchdog.disable();
+	int8_t ret;
+	int tries = 50;
+	while((ret = mqtt_client.connect()) != 0) { // connect will return 0 for connected
+		Serial.println(mqtt_client.connectErrorString(ret));
+		Serial.print("Retrying MQTT connection ... tries = ");
+		Serial.println(tries);
+		mqtt_client.disconnect();
+
+		// Check if WiFi Is connected.
+		if(WiFi.status() != WL_CONNECTED)
+		{
+			// We need to start WiFi
+			wifi_connect();
+			Watchdog.disable();
+		}
+		if(--tries == 0)
+		{
+			Serial.println(F("Enabling watchdog"));
+			Watchdog.enable(WATCHDOG_TIME);
+		}
+
+		delay(10000);
+	}
+
+	Serial.println("MQTT Connected!");
+	// Re-enable the watchdog
+	Watchdog.enable(WATCHDOG_TIME);
+}
+
+void mqtt_publish_data(Adafruit_MQTT_Publish *pub, uint32_t timestamp, int32_t val)
+{
+    uint8_t _val[8];
+
+    _val[4] = (val >> 24) & 0xFF;
+    _val[5] = (val >> 16) & 0xFF;
+    _val[6] = (val >> 8) & 0xFF;
+    _val[7] = val & 0xFF;
+
+    _val[0] = (timestamp >> 24) & 0xFF;
+    _val[1] = (timestamp >> 16) & 0xFF;
+    _val[2] = (timestamp >> 8) & 0xFF;
+    _val[3] = timestamp & 0xFF;
+
+    pub->publish(_val, 8);
+}
+
+void wifi_list_networks() {
+	// scan for nearby networks:
+	Serial.println("** Scan Networks **");
+	byte numSsid = WiFi.scanNetworks();
+
+	// print the list of networks seen:
+	Serial.print("number of available networks:");
+	Serial.println(numSsid);
+
+	// print the network number and name for each network found:
+	for (int thisNet = 0; thisNet<numSsid; thisNet++) {
+		Serial.print(thisNet);
+		Serial.print(") ");
+		Serial.print(WiFi.SSID(thisNet));
+		Serial.print("\tSignal: ");
+		Serial.print(WiFi.RSSI(thisNet));
+		Serial.print(" dBm");
+		Serial.print("\tEncryption: ");
+		Serial.println(WiFi.encryptionType(thisNet));
+	}
+}
+
+void mqtt_poll(int16_t timeout)
+{
+	Adafruit_MQTT_Subscribe *subscription;
+	while ((subscription = mqtt_client.readSubscription(timeout)))
+	{
+		if(subscription == &mqtt_pump_speed_cmd)
+		{
+			if(mqtt_pump_speed_cmd.datalen == 1)
+			{
+				uint8_t _val = mqtt_pump_speed_cmd.lastread[0];
+				Serial.print(F("Setting pump speed to "));
+				Serial.println(_val);
+				set_pump_speed(_val);
+			}
+		} else if(subscription == &mqtt_set_time_cmd) {
+			if(mqtt_pump_speed_cmd.datalen == 4)
+			{
+				uint32_t _time = *((uint32_t*)(mqtt_set_time_cmd.lastread));
+				Serial.print(F("Setting time to "));
+				Serial.println(_time);
+			}
+		}
+
+	}
 }
