@@ -34,7 +34,6 @@
 #define PUMP_FLOW_F_TO_Q                    5
 #define LPM_TO_GPM                          0.26417287472922
 
-
 // Other digital pins
 #define OUTPUT_LED_L			                  13
 #define FLOW_SWITCH       		              0
@@ -44,13 +43,24 @@
 #define PUMP_BIT_2        		              5
 #define ONE_WIRE_BUS                        1
 
-#define UTC_TIME_OFFSET	                    4
+#define UTC_TIME_OFFSET	                    4 // Hours
+
+#define EPS_PUMP_FLOW_TIMEOUT               30000L
 
 #define WATCHDOG_TIME                       8000
 #define OTA_CONNECTION_NAME                 "pool_controller_ota"
 
 #define EEPROM_PUMP_SPEED                   0
 #define EEPROM_PUMP_STOP                    1
+
+// Programs to run
+enum programs {
+  PROGRAM_HALT         = 0,
+  PROGRAM_RUN          = 1,
+  PROGRAM_TIMER        = 2,
+  PROGRAM_DRAIN        = 3,
+  PROGRAM_FILL         = 4
+};
 
 // Days of the week
 
@@ -91,4 +101,9 @@ struct PumpFlowRate {
 		unsigned long last;
 		unsigned long last_read;
 		unsigned long clicks;
+};
+
+struct ProgramData {
+  int current;
+  uint32_t level_target;
 };
