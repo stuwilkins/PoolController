@@ -5,3 +5,4 @@ build
 .DS_Store
 *.swo
 auth.h
+build*

@@ -24,11 +24,14 @@ class EEProm_I2C
   public:
     EEProm_I2C(uint8_t addr);
     bool begin(void);
-    bool write(uint16_t offset, uint8_t* data, int size);
-    bool read(uint16_t offset, uint8_t* data, int size);
+    bool store(uint16_t offset, uint8_t *data, int size);
+    bool retrieve(uint16_t offset, uint8_t* data, int size);
 
   private:
     uint8_t _addr;
+    bool write(uint16_t offset, uint8_t* data, int size);
+    bool read(uint16_t offset, uint8_t* data, int size);
+    uint16_t chunk = 1;
 };
 
 #endif
