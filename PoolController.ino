@@ -21,8 +21,6 @@
 //
 
 #include <Wire.h>
-#include <OneWire.h>
-#include <DallasTemperature.h>
 #include <avr/pgmspace.h>
 #include <WiFi101.h>
 #include <WiFi101OTA.h>
@@ -34,17 +32,12 @@
 #include <RTClib.h>
 #include <PubSubClient.h>
 #include <NTPClient.h>
-#include "eeprom_i2c.h"
+#include <eeprom_i2c.h>
 
 #include "auth.h"
 #include "PoolController.h"
 #include "timer.h"
 
-// One Wire Bus Definition
-OneWire oneWire(ONE_WIRE_BUS);
-DallasTemperature oneWireSensors(&oneWire);
-DeviceAddress waterThermometer = {0x28, 0x8F, 0x3B, 0xE1, 0x08, 0x00, 0x00, 0xC7};
- 
 // Setup other sensors
 Adafruit_HTU21DF htu = Adafruit_HTU21DF();
 Adafruit_SI1145 uv = Adafruit_SI1145();
@@ -55,40 +48,48 @@ pt100rtd PT100 = pt100rtd();
 RTC_DS3231 rtc;
 
 // EEPROM
-EEProm_I2C eeprom = EEProm_I2C(0x50);
+EEPROM_I2C eeprom = EEPROM_I2C(0x50);
 
 // WIFI and MQTT setup
 WiFiClient wifi_client;
 PubSubClient mqtt_client(wifi_client);
 
-static const char* mqtt_water_temp  = "homeauto/pool/water_temp";
-static const char* mqtt_air_temp  = "homeauto/pool/air_temp";
-static const char* mqtt_air_humidity  = "homeauto/pool/air_humidity";
-static const char* mqtt_water_level  = "homeauto/pool/water_level";
-static const char* mqtt_flow_switch  = "homeauto/pool/flow_switch";
-static const char* mqtt_uv_index  = "homeauto/pool/uv_index";
-static const char* mqtt_vis  = "homeauto/pool/vis_light";
-static const char* mqtt_ir  = "homeauto/pool/ir_light";
-static const char* mqtt_pump_speed  = "homeauto/pool/pump_speed";
-static const char* mqtt_error  = "homeauto/pool/error";
+static const char* mqtt_water_temp     = "homeauto/pool/water_temp";
+static const char* mqtt_air_temp       = "homeauto/pool/air_temp";
+static const char* mqtt_air_humidity   = "homeauto/pool/air_humidity";
+static const char* mqtt_water_level    = "homeauto/pool/water_level";
+static const char* mqtt_flow_switch    = "homeauto/pool/flow_switch";
+static const char* mqtt_uv_index       = "homeauto/pool/uv_index";
+static const char* mqtt_vis            = "homeauto/pool/vis_light";
+static const char* mqtt_ir             = "homeauto/pool/ir_light";
+static const char* mqtt_pump_speed     = "homeauto/pool/pump_speed";
+static const char* mqtt_error          = "homeauto/pool/error";
 static const char* mqtt_pump_pressure  = "homeauto/pool/pump_pressure";
-static const char* mqtt_pump_flow  = "homeauto/pool/pump_flow";
-static const char* mqtt_fill_flow  = "homeauto/pool/fill_flow";
-static const char* mqtt_program  = "homeauto/pool/program";
-static const char* mqtt_loop_time  = "homeauto/pool/loop_time";
-static const char* mqtt_uptime  = "homeauto/pool/uptime";
-static const char* mqtt_prime_flow  = "homeauto/pool/prime_flow";
-static const char* mqtt_prime_pressure  = "homeauto/pool/prime_pressure";
+static const char* mqtt_pump_flow      = "homeauto/pool/pump_flow";
+static const char* mqtt_fill_flow      = "homeauto/pool/fill_flow";
+static const char* mqtt_program        = "homeauto/pool/program";
+static const char* mqtt_loop_time      = "homeauto/pool/loop_time";
+static const char* mqtt_uptime         = "homeauto/pool/uptime";
+static const char* mqtt_prime_flow     = "homeauto/pool/prime_flow";
+static const char* mqtt_prime_pressure = "homeauto/pool/prime_pressure";
 
 static const char* mqtt_pump_speed_sp  = "homeauto/pool/pump_speed_sp";
-static const char* mqtt_program_sp  = "homeauto/pool/program_sp";
-static const char* mqtt_drain_sp  = "homeauto/pool/set_drain_sp";
-static const char* mqtt_fill_sp  = "homeauto/pool/set_fill_sp";
-static const char* mqtt_reset  = "homeauto/pool/reset";
-static const char* mqtt_prime_pump  = "homeauto/pool/prime_pump";
+static const char* mqtt_program_sp     = "homeauto/pool/program_sp";
+static const char* mqtt_drain_sp       = "homeauto/pool/set_drain_sp";
+static const char* mqtt_fill_sp        = "homeauto/pool/set_fill_sp";
+static const char* mqtt_reset          = "homeauto/pool/reset";
+static const char* mqtt_prime_pump     = "homeauto/pool/prime_pump_sp";
+static const char* mqtt_boost_sp       = "homeauto/pool/boost_sp";
+static const char* mqtt_boost_time_sp  = "homeauto/pool/boost_time_sp";
+static const char* mqtt_boost_speed_sp = "homeauto/pool/boost_speed_sp";
 
-static const char* mqtt_subscribe[] = {mqtt_pump_speed_sp, mqtt_program_sp, mqtt_drain_sp, 
-                                       mqtt_fill_sp, mqtt_reset, mqtt_prime_pump, 0};
+static const char* mqtt_subscribe[]    = {mqtt_pump_speed_sp, mqtt_program_sp, mqtt_drain_sp,
+                                          mqtt_fill_sp, mqtt_reset, mqtt_prime_pump, 
+										  mqtt_boost_sp, mqtt_boost_time_sp, 
+										  mqtt_boost_speed_sp, 0};
+
+static const char* ota_name            = "pool_controller_ota";
+static const char* ota_password        = "bHmkHvDM3Ka*^nQz";
 
 WiFiUDP ntp_udp;
 NTPClient ntp_client(ntp_udp, NTP_ADDRESS, NTP_OFFSET, NTP_INTERVAL);
@@ -108,7 +109,7 @@ volatile PumpFlowRate pump_flow;
 volatile PumpFlowRate fill_flow;
 
 // Error handler which pauses and flashes the L led. 
-void error(const __FlashStringHelper*err) {
+void error(const __FlashStringHelper *err) {
 	Serial.println(err);
 	while(1)
 	{
@@ -144,13 +145,6 @@ void setup() {
 	pinMode(FILL_FLOW_PIN, INPUT_PULLUP);
 
 	Serial.begin(115200);
-
-	int i = 0;
-	for(i=0;i<100;i++)
-	{
-		digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-		delay(100);
-	}
 
 	// Set the L led hight to show we are configuring
 	digitalWrite(OUTPUT_LED_L, HIGH);
@@ -193,8 +187,7 @@ void setup() {
 	Serial.println(F(" DONE"));
 	Watchdog.reset();  // Pet the dog!
 	uptime = rtc.now().unixtime() - NTP_OFFSET;
-	//mqtt_client.publish(mqtt_uptime, (uint8_t*)uptime, sizeof(uptime), 1); 
-	Serial.println(uptime);
+	mqtt_client.publish(mqtt_uptime, (uint8_t*)(&uptime), sizeof(uptime), 1); 
 
 	// Set defaults
 	last = rtc.now();
@@ -208,9 +201,13 @@ void setup() {
 	program_data.run_pump_speed = PROGRAM_PUMP_RUN_SPEED;
 	program_data.drain_pump_speed = PROGRAM_PUMP_DRAIN_SPEED;
 	program_data.prime = 0;
+	program_data.boost_time = last;
+	program_data.boost_pump_speed = 6;
+	program_data.boost_duration = 60 * 30; // 30m
+	program_data.boost_counter = 0;
 
 	// Now restore from memory
-	//eeprom_restore();
+	eeprom_read();
 
 	// Setup ISR
 	attachInterrupt(digitalPinToInterrupt(PUMP_FLOW_PIN), 
@@ -222,16 +219,24 @@ void setup() {
 	digitalWrite(OUTPUT_LED_L, LOW);
 }
 
-bool eeprom_restore(void)
+bool eeprom_write(void)
+{
+	uint32_t magic = EEPROM_MAGIC;
+
+	eeprom.writeIfDiff(EEPROM_MAGIC_DATA, (uint8_t *)(&magic), sizeof(magic));
+	eeprom.writeIfDiff(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true, true);
+
+	return true;
+}
+
+bool eeprom_read(void)
 {
 	uint32_t magic;
-	if(!eeprom.retrieve(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
+	if(!eeprom.read(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
 	{
 		return false;
 	}
 
-	Serial.print(F("EEPROM Magic = "));
-	Serial.println(magic, HEX);
 	if(magic == EEPROM_MAGIC)
 	{
 		return false;
@@ -290,6 +295,24 @@ void loop() {
 			process_eps_pump();
 			program_data.current = PROGRAM_HALT;
 		}
+
+		if(program_data.current == PROGRAM_BOOST)
+		{
+			// Check if time is up
+			int32_t delta = (program_data.boost_time - now).totalseconds();
+			if(delta < 0)
+			{
+				// We are done
+				program_data.current = program_data.boost_program;
+				program_data.boost_counter = 0;
+			} else {
+				if(get_pump_speed() != program_data.boost_pump_speed)
+				{
+					set_pump_speed(program_data.boost_pump_speed);
+				}
+				program_data.boost_counter = delta;
+			}
+		}
 		
 		if(program_data.current == PROGRAM_DRAIN) {
 			// Running DRAIN Program
@@ -297,7 +320,7 @@ void loop() {
 			if(_wl < program_data.level_target)
 			{
 				program_data.current = PROGRAM_HALT;
-				write_state();
+				eeprom_write();
 			} else {
 				if(get_pump_speed() != program_data.drain_pump_speed)
 				{
@@ -309,7 +332,7 @@ void loop() {
 		if(program_data.current == PROGRAM_FILL) {
 			// Running FILL Program
 			program_data.current = PROGRAM_HALT;
-			write_state();
+			eeprom_write();
 		}
 
 		if(program_data.current == PROGRAM_RUN) {
@@ -336,13 +359,13 @@ void loop() {
 
 		process_telemetry(now.unixtime() - NTP_OFFSET);
 
-		if((prime_stop == 1)&& ((now - restart_pump).totalseconds() > 30))
+		if((prime_stop == 1) && ((now - restart_pump).totalseconds() > 30))
 		{
 			prime_stop = 2;
 			set_pump_stop(0);
 		}
 
-		if((prime_stop == 2)&& ((now - restart_pump).totalseconds() > 270))
+		if((prime_stop == 2) && ((now - restart_pump).totalseconds() > 270))
 		{
 			prime_stop = 0;
 			// store flow and pressure during prime. 
@@ -427,31 +450,26 @@ void process_telemetry(uint32_t now)
 
 void read_sensors(DataReadings *readings)
 {
-	readings->water_temp = get_one_wire_temp(oneWireSensors, waterThermometer);
-
 	//readings->air_temp = htu.readTemperature();
 	//readings->air_humidity = htu.readHumidity();
 
-	//uint8_t fault = max_ts.readFault();
-	//if(fault)
-	//{
-	//	Serial.print("Fault 0x"); Serial.println(fault, HEX);
-	//	max_ts.clearFault();
-	//	readings->water_temp = 0.0;
-	//} else {
-	//	uint16_t rtd = max_ts.readRTD();
-	//	uint32_t dummy;
-	//	dummy = ((uint32_t)(rtd << 1)) * 100 * ((uint32_t) floor(MAX31865_RREF)) ;
-	//	dummy >>= 16 ;
+	uint8_t fault = max_ts.readFault();
+	if(fault)
+	{
+		Serial.print("Fault 0x"); Serial.println(fault, HEX);
+		max_ts.clearFault();
+		readings->water_temp = 0.0;
+	} else {
+		uint16_t rtd = max_ts.readRTD();
+		uint32_t dummy;
+		
+		dummy = ((uint32_t)(rtd << 1)) * 100 * ((uint32_t) floor(MAX31865_RREF)) ;
+		dummy >>= 16 ;
 
-	//	uint16_t ohmsx100 = (uint16_t)(dummy & 0xFFFF);
-	//	//float ohms = (float)(ohmsx100 / 100) + ((float)(ohmsx100 % 100) / 100.0) ;
-
-	//	Serial.print("rtd: 0x") ; Serial.print(rtd,HEX) ;
-	//	Serial.print(", ohmsx100: ") ; Serial.println(ohmsx100) ;
-
-	//	readings->water_temp = PT100.celsius(ohmsx100);
-	//}
+		uint16_t ohmsx100 = (uint16_t)(dummy & 0xFFFF);
+		float water_temp = PT100.celsius(ohmsx100);
+		readings->water_temp = water_temp;
+	}
 
 	readings->uv_index = uv.readUV();
 	readings->vis = uv.readVisible();
@@ -471,6 +489,10 @@ void read_sensors(DataReadings *readings)
 		readings->error_count++;
 		Serial.println(F("**** Resetting UV sensor"));
 		uv.begin();
+		delay(100);
+		readings->uv_index = uv.readUV();
+		readings->vis = uv.readVisible();
+		readings->ir = uv.readIR();
 	}
 }
 
@@ -530,14 +552,8 @@ void publish_readings(DataReadings *readings, uint32_t now)
 	mqtt_publish_data(mqtt_ir, now, (int32_t)(readings->ir), 0);
 	mqtt_publish_data(mqtt_pump_pressure, now, (int32_t)(readings->pump_pressure), 0);
 	mqtt_publish_data(mqtt_pump_flow, now, (int32_t)(readings->pump_flow), 0);
-
-	if((readings->pump_speed > 1) && (readings->flow_switch == 1))
-	{
-		mqtt_publish_data(mqtt_pump_speed, now, (int32_t)pumpSpeeds[readings->pump_speed], 0); 
-	} else {
-		mqtt_publish_data(mqtt_pump_speed, now, 0, 0);
-	}
-
+	mqtt_publish_data(mqtt_fill_flow, now, (int32_t)(readings->fill_flow), 0);
+	mqtt_publish_data(mqtt_pump_speed, now, (int32_t)pumpSpeeds[readings->pump_speed], 0); 
 	mqtt_publish_data(mqtt_error, now, (int32_t)readings->error_count, 0);
 }
 
@@ -596,7 +612,7 @@ void setup_sensors(void)
 	// Setup SI1145
 	if(!uv.begin()) 
 	{
-		error(F("Could not find SI1145"));
+		//error(F("Could not find SI1145"));
 	}
 
 	// Setup MAX31865	
@@ -604,51 +620,11 @@ void setup_sensors(void)
 	{
 		error(F("Unable to set MAX31865"));
 	}
-
-	// Setup 1-Wire sensors
-
-	oneWireSensors.begin();
-
-	Serial.print(F("Found "));
-	Serial.print(oneWireSensors.getDeviceCount(), DEC);
-	Serial.println(F(" device(s)."));
-
-	Serial.print("OneWire Parasitic power is: "); 
-	if (oneWireSensors.isParasitePowerMode())
-	{
-		Serial.println(F("ON"));
-	} else {
-		Serial.println(F("OFF"));
-	}
-
-	if(!oneWire.search(waterThermometer))
-	{
-		error(F("Unable to find address for waterThermometer"));
-	}
-
-	oneWireSensors.setResolution(waterThermometer, 12);
-}
-
-float get_one_wire_temp(DallasTemperature sensor, DeviceAddress address)
-{
-	oneWireSensors.requestTemperatures();
-	float tempC = sensor.getTempC(address);
-	return tempC;
 }
 
 int32_t get_water_sensor_level(void)
 {
-	uint64_t sum = 0;
-	int32_t val;
-	int i;
-
-	for(i=0;i<5;i++)
-	{
-		sum += analogRead(WATER_LEVEL_PIN);
-		delay(1);
-	}
-
-	val = (int32_t)(sum / 5);
+	int32_t val = analogRead(WATER_LEVEL_PIN);
 
 	val = (val * WATER_LEVEL_X) + WATER_LEVEL_C;
 
@@ -657,17 +633,9 @@ int32_t get_water_sensor_level(void)
 
 int32_t get_pump_pressure(void)
 {
-	uint64_t sum = 0;
 	int32_t val;
-	int i;
 
-	for(i=0;i<5;i++)
-	{
-		sum += analogRead(PUMP_PRESSURE_PIN);
-		delay(1);
-	}
-
-	val = (int32_t)(sum / 5);
+	val = analogRead(PUMP_PRESSURE_PIN);
 
 	// Now do conversion
 	float _val = 3300 * (float)val;
@@ -786,16 +754,13 @@ void wifi_connect() {
 		}
 		delay(5000);
 	}
-	
-	Serial.println(F("Waiting 10s for WIFI to connect"));
-	delay(10000);
-
-	// start the WiFi OTA library with SD based storage
-	Serial.println(F("Setup OTA Programming ....."));
-	WiFiOTA.begin(OTA_CONNECTION_NAME, ota_password, InternalStorage);
 
 	// Re-enable the watchdog
 	Watchdog.enable(WATCHDOG_TIME);
+	
+	// start the WiFi OTA library
+	Serial.println(F("Setup OTA Programming ....."));
+	WiFiOTA.begin(ota_name, ota_password, InternalStorage);
 }
 
 void mqtt_connect() {
@@ -867,35 +832,59 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 		if(length == 1)
 		{
 			program_data.run_pump_speed = payload[0];
-			write_state();
+			eeprom_write();
 		}
 	} else if (!strcmp(topic, mqtt_program_sp)) {
 		Serial.println(F("Setting program"));
 		if(length == 1)
 		{
 			program_data.current = (int)(payload[0]);
-			write_state();
+			eeprom_write();
 		}
 	} else if(!strcmp(topic, mqtt_reset)) {
-		if(!strncmp((const char*)payload, "RESET", length))
+		if(length == 1)
 		{
-			error(F("RESET"));
+			if(payload[0])
+			{
+				error(F("RESET"));
+			}
 		}
 	} else if(!strcmp(topic, mqtt_prime_pump)) {
-		if(!strncmp((const char*)payload, "PRIME", length))
+		if(length == 1)
 		{
-			program_data.prime = 1;
+			if(payload[0])
+			{
+				program_data.prime = 1;
+			}
+		}
+	} else if(!strcmp(topic, mqtt_boost_sp)) {
+		if(length == 1) 
+		{
+			if(payload[0])
+			{
+				program_data.boost_program = program_data.current;
+				program_data.current = PROGRAM_BOOST;
+				program_data.boost_time = rtc.now() + 
+					TimeSpan(program_data.boost_duration);
+			}
+		}
+	} else if(!strcmp(topic, mqtt_boost_time_sp)) {
+		if(length == 4)
+		{
+			uint32_t _val = 0;
+			_val |= (payload[0] >> 24);
+			_val |= (payload[1] >> 16);
+			_val |= (payload[2] >> 8);
+			_val |= payload[3];
+			program_data.boost_duration = _val;
+		}
+	} else if(!strcmp(topic, mqtt_boost_speed_sp)) {
+		if(length == 1)
+		{
+			program_data.boost_pump_speed = payload[0];
 		}
 	}
-}
 
-void write_state(void)
-{
-	uint32_t magic = EEPROM_MAGIC;
-	Serial.print(F("EEPROM Magic = 0x"));
-	Serial.println(magic, HEX);
-	eeprom.store(EEPROM_MAGIC_DATA, (uint8_t *)(&magic), sizeof(magic));
-	//eeprom.store(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data));
 }
 
 void wifi_list_networks()

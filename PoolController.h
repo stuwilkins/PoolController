@@ -38,11 +38,10 @@
 #define PUMP_FLOW_F_TO_Q                    5
 #define FILL_FLOW_PIN                       12
 // Calculate flow rate
-// F = 0.2Q(l.min^-1)
-// Q(l.min^-1) = 5F 
-// 1 l.min^-1 = 0.26417287472922 GPM
-#define FILL_FLOW_F_TO_Q                    5
-#define LPM_TO_GPM                          0.26417287472922
+// F = 4.8Q(l.min^-1)
+// Q(l.min^-1) = 0.2083F 
+#define FILL_FLOW_F_TO_Q                    0.2083
+#define LPM_TO_GPM                          0.2641
 
 // Other digital pins
 #define OUTPUT_LED_L			                  13
@@ -51,16 +50,13 @@
 #define PUMP_BIT_0        		              9
 #define PUMP_BIT_1        		              6
 #define PUMP_BIT_2        		              5
-#define ONE_WIRE_BUS                        1
 
 #define EPS_PUMP_FLOW_TIMEOUT               30000L
 
 #define WATCHDOG_TIME                       8000
-#define OTA_CONNECTION_NAME                 "pool_controller_ota"
 
 #define EEPROM_PROGRAM_DATA                 16
 #define EEPROM_MAGIC_DATA                   0
-//#define EEPROM_MAGIC                        0x8BADF00D
 #define EEPROM_MAGIC                        0xDEADF00D
 
 #define MQTT_SERVER                         "192.168.1.2"
@@ -71,7 +67,7 @@
 #define NTP_OFFSET                          -4 * 60 * 60 // In seconds
 #define NTP_INTERVAL                        60 * 1000 // In miliseconds
 
-#define PROGRAM_LEVEL_TARGET                24500
+#define PROGRAM_LEVEL_TARGET                25500
 #define PROGRAM_PUMP_RUN_SPEED              3
 #define PROGRAM_PUMP_DRAIN_SPEED            7
 
@@ -133,6 +129,11 @@ struct ProgramData {
   uint8_t run_pump_speed;
   uint8_t drain_pump_speed;
   uint8_t prime;
+  DateTime boost_time;
+  int32_t boost_duration;
+  int boost_program;
+  uint8_t boost_pump_speed;
+  int32_t boost_counter;
 };
 
 
@@ -140,7 +141,8 @@ struct ProgramData {
 
 void pump_flow_ISR();
 void fill_flow_ISR();
-bool eeprom_restore(void);
+bool eeprom_read(void);
+bool eeprom_write(void);
 void process_eps_pump();
 void process_telemetry(uint32_t now);
 void read_sensors(DataReadings *readings);
@@ -150,7 +152,6 @@ int32_t get_pump_flow(void);
 void publish_readings(DataReadings *readings, uint32_t now);
 void print_readings(DataReadings *readings);
 void setup_sensors(void);
-float get_one_wire_temp(DallasTemperature sensor, DeviceAddress address);
 int32_t get_water_sensor_level(void);
 int32_t get_pump_pressure(void);
 void setup_clock(void);
