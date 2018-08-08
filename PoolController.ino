@@ -232,13 +232,23 @@ bool eeprom_write(void)
 bool eeprom_read(void)
 {
 	uint32_t magic;
-	if(!eeprom.read(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
+	if(eeprom.read(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
 	{
+		Serial.println(F("Unable to read MAGIC from EEPROM"));
 		return false;
 	}
 
 	if(magic == EEPROM_MAGIC)
 	{
+		Serial.println(F("EEPROM Magic does not match"));
+		return false;
+	}
+
+	int rc;
+	if((rc = eeprom.read(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true)))
+	{
+		Serial.print(F("Failed to read EEPROM Data rc = "));
+		Serial.println(rc);
 		return false;
 	}
 
@@ -320,7 +330,6 @@ void loop() {
 			if(_wl < program_data.level_target)
 			{
 				program_data.current = PROGRAM_HALT;
-				eeprom_write();
 			} else {
 				if(get_pump_speed() != program_data.drain_pump_speed)
 				{
@@ -332,7 +341,6 @@ void loop() {
 		if(program_data.current == PROGRAM_FILL) {
 			// Running FILL Program
 			program_data.current = PROGRAM_HALT;
-			eeprom_write();
 		}
 
 		if(program_data.current == PROGRAM_RUN) {
@@ -377,6 +385,8 @@ void loop() {
 
 		mqtt_publish_data(mqtt_loop_time, now.unixtime() - NTP_OFFSET, 
 				(int32_t)(millis() - start_millis), 0);
+
+		eeprom_write();
 
 	}
 
@@ -832,14 +842,12 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 		if(length == 1)
 		{
 			program_data.run_pump_speed = payload[0];
-			eeprom_write();
 		}
 	} else if (!strcmp(topic, mqtt_program_sp)) {
 		Serial.println(F("Setting program"));
 		if(length == 1)
 		{
 			program_data.current = (int)(payload[0]);
-			eeprom_write();
 		}
 	} else if(!strcmp(topic, mqtt_reset)) {
 		if(length == 1)
