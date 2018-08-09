@@ -33,6 +33,7 @@
 #include <PubSubClient.h>
 #include <NTPClient.h>
 #include <eeprom_i2c.h>
+#include <RemoteConsole.h>
 
 #include "auth.h"
 #include "PoolController.h"
@@ -51,6 +52,9 @@ RTC_DS3231 rtc;
 EEPROM_I2C eeprom = EEPROM_I2C(0x50);
 
 // WIFI and MQTT setup
+WiFiUDP ntp_udp;
+NTPClient ntp_client(ntp_udp, NTP_ADDRESS, NTP_OFFSET, NTP_INTERVAL);
+RemoteConsole remote_console;
 WiFiClient wifi_client;
 PubSubClient mqtt_client(wifi_client);
 
@@ -91,8 +95,6 @@ static const char* mqtt_subscribe[]    = {mqtt_pump_speed_sp, mqtt_program_sp, m
 static const char* ota_name            = "pool_controller_ota";
 static const char* ota_password        = "bHmkHvDM3Ka*^nQz";
 
-WiFiUDP ntp_udp;
-NTPClient ntp_client(ntp_udp, NTP_ADDRESS, NTP_OFFSET, NTP_INTERVAL);
 
 // Data Readings
 DataReadings sensor_readings;
@@ -155,36 +157,37 @@ void setup() {
 	Serial.println(" milliseconds!");
 	Serial.println();
 
-	// Setup Sensors
-	Serial.println(F("Setup Sensors ...."));
-	setup_sensors();
-	Watchdog.reset();  // Pet the dog!
-
-	// Setup eeprom
-	Serial.println(F("Setup eeprom ...."));
-	eeprom.begin();
-
 	// Setup WIFI
 
 	Serial.println(F("Setup WIFI ...."));
 	setup_wifi();
 	wifi_connect();
 	Watchdog.reset();  // Pet the dog!
+	remote_console.begin("server");
 
-	Serial.println(F("Setup MQTT ...."));
+	remote_console.println(F("Setup MQTT ...."));
 	mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
 	mqtt_client.setCallback(mqtt_callback);
 	mqtt_connect();
 	Watchdog.reset();  // Pet the dog!
 
-	Serial.println(F("Setup NTP for time ...."));
+	remote_console.println(F("Setup NTP for time ...."));
 	ntp_client.begin();
 	Watchdog.reset();
 
+	// Setup Sensors
+	remote_console.println(F("Setup Sensors ...."));
+	setup_sensors();
+	Watchdog.reset();  // Pet the dog!
+
+	// Setup eeprom
+	remote_console.println(F("Setup eeprom ...."));
+	eeprom.begin();
+
 	// Setup RTC
-	Serial.print(F("Setup RTC ...."));
+	remote_console.print(F("Setup RTC ...."));
 	setup_clock();
-	Serial.println(F(" DONE"));
+	remote_console.println(F(" DONE"));
 	Watchdog.reset();  // Pet the dog!
 	uptime = rtc.now().unixtime() - NTP_OFFSET;
 	mqtt_client.publish(mqtt_uptime, (uint8_t*)(&uptime), sizeof(uptime), 1); 
@@ -223,6 +226,8 @@ bool eeprom_write(void)
 {
 	uint32_t magic = EEPROM_MAGIC;
 
+	remote_console.println(F("**** EPROM WRITE ****"));
+
 	eeprom.writeIfDiff(EEPROM_MAGIC_DATA, (uint8_t *)(&magic), sizeof(magic));
 	eeprom.writeIfDiff(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true, true);
 
@@ -234,21 +239,21 @@ bool eeprom_read(void)
 	uint32_t magic;
 	if(eeprom.read(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
 	{
-		Serial.println(F("Unable to read MAGIC from EEPROM"));
+		remote_console.println(F("Unable to read MAGIC from EEPROM"));
 		return false;
 	}
 
-	if(magic == EEPROM_MAGIC)
+	if(magic != EEPROM_MAGIC)
 	{
-		Serial.println(F("EEPROM Magic does not match"));
+		remote_console.println(F("EEPROM Magic does not match"));
 		return false;
 	}
 
 	int rc;
 	if((rc = eeprom.read(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true)))
 	{
-		Serial.print(F("Failed to read EEPROM Data rc = "));
-		Serial.println(rc);
+		remote_console.print(F("Failed to read EEPROM Data rc = "));
+		remote_console.println(rc);
 		return false;
 	}
 
@@ -271,6 +276,9 @@ void loop() {
 
 	// Poll for MQTT updates
 	mqtt_client.loop();
+
+	// Loop through the remote colsole....
+	remote_console.loop();
 
 	// Read the current time
 	now = rtc.now();
@@ -387,7 +395,6 @@ void loop() {
 				(int32_t)(millis() - start_millis), 0);
 
 		eeprom_write();
-
 	}
 
 	// Store last time
@@ -412,7 +419,7 @@ void process_eps_pump()
 		// First notice, set timeout
 		flow_time = millis();
 		flow_error = true;
-		Serial.println(F("*** EPS : Flow error detected, timer started"));
+		remote_console.println(F("*** EPS : Flow error detected, timer started"));
 	}
 
 	if(flow_error)
@@ -422,18 +429,18 @@ void process_eps_pump()
 			if(error)
 			{
 				// We are in an error state
-				Serial.println(F("*** EPS : Flow error")); 
+				remote_console.println(F("*** EPS : Flow error")); 
 				set_pump_stop(1);
 				set_pump_speed(0);
 				program_data.current = PROGRAM_HALT;
 			} else {
 				// the error cleared. 
-				Serial.println(F("*** EPS : Resetting flow error"));
+				remote_console.println(F("*** EPS : Resetting flow error"));
 				flow_error = false;
 			}
 		} else {
-			Serial.print(F("** EPS : Countdown = "));
-			Serial.println(EPS_PUMP_FLOW_TIMEOUT - (millis() - flow_time));
+			remote_console.print(F("** EPS : Countdown = "));
+			remote_console.println(EPS_PUMP_FLOW_TIMEOUT - (millis() - flow_time));
 		}
 	}
 }
@@ -448,7 +455,7 @@ void process_telemetry(uint32_t now)
 	// Read pool sensors
 	read_sensors(&sensor_readings);
 
-	//print_readings(&sensor_readings);
+	print_readings(&sensor_readings);
 
 	// Publish with MQTT
 	publish_readings(&sensor_readings, now);
@@ -466,7 +473,7 @@ void read_sensors(DataReadings *readings)
 	uint8_t fault = max_ts.readFault();
 	if(fault)
 	{
-		Serial.print("Fault 0x"); Serial.println(fault, HEX);
+		remote_console.print("Fault 0x"); remote_console.println(fault, HEX);
 		max_ts.clearFault();
 		readings->water_temp = 0.0;
 	} else {
@@ -497,7 +504,7 @@ void read_sensors(DataReadings *readings)
 			(readings->ir == 0))
 	{
 		readings->error_count++;
-		Serial.println(F("**** Resetting UV sensor"));
+		remote_console.println(F("**** Resetting UV sensor"));
 		uv.begin();
 		delay(100);
 		readings->uv_index = uv.readUV();
@@ -570,44 +577,44 @@ void publish_readings(DataReadings *readings, uint32_t now)
 void print_readings(DataReadings *readings)
 {
 
-    Serial.print(F("Water Temp : "));
-    Serial.print(readings->water_temp);
-    Serial.println(F(" degC\t\t"));
-    Serial.print(F("Air Temperature "));
-    Serial.print(readings->air_temp);
-    Serial.println(F(" degC\t\t"));
-    Serial.print(F("Air Humidity "));
-    Serial.print(readings->air_humidity);
-    Serial.println(F("%\t\t"));
-    Serial.print(F("Water Level "));
-    Serial.print(readings->water_level);
-    Serial.println(F("%\t\t"));
-    Serial.print(F("Flow "));
+    remote_console.print(F("Water Temp : "));
+    remote_console.print(readings->water_temp);
+    remote_console.println(F(" degC\t\t"));
+    remote_console.print(F("Air Temperature "));
+    remote_console.print(readings->air_temp);
+    remote_console.println(F(" degC\t\t"));
+    remote_console.print(F("Air Humidity "));
+    remote_console.print(readings->air_humidity);
+    remote_console.println(F("%\t\t"));
+    remote_console.print(F("Water Level "));
+    remote_console.print(readings->water_level);
+    remote_console.println(F("%\t\t"));
+    remote_console.print(F("Flow "));
 
     if(readings->flow_switch)
     {
-        Serial.print(F("ON "));
+        remote_console.print(F("ON "));
     } else {
-        Serial.print(F("OFF"));
+        remote_console.print(F("OFF"));
     }
 
-    Serial.println("");
-    Serial.print(F("UV "));
-    Serial.print(((float)readings->uv_index) / 100);
-    Serial.println("");
-    Serial.print(F("VIS "));
-    Serial.print(readings->vis);
-    Serial.println("");
-    Serial.print(F("IR "));
-    Serial.print(readings->ir);
-    Serial.println("");
-    Serial.print(F("Speed "));
-    Serial.print(readings->pump_speed);
-    Serial.print(F(" "));
-    Serial.println(pumpSpeeds[readings->pump_speed]);
-	Serial.print(F("Pump Flow Rate "));
-	Serial.print(readings->pump_flow);
-	Serial.println(F(" *1000 GPM"));
+    remote_console.println("");
+    remote_console.print(F("UV "));
+    remote_console.print(((float)readings->uv_index) / 100);
+    remote_console.println("");
+    remote_console.print(F("VIS "));
+    remote_console.print(readings->vis);
+    remote_console.println("");
+    remote_console.print(F("IR "));
+    remote_console.print(readings->ir);
+    remote_console.println("");
+    remote_console.print(F("Speed "));
+    remote_console.print(readings->pump_speed);
+    remote_console.print(F(" "));
+    remote_console.println(pumpSpeeds[readings->pump_speed]);
+	remote_console.print(F("Pump Flow Rate "));
+	remote_console.print(readings->pump_flow);
+	remote_console.println(F(" *1000 GPM"));
 
 }
 
@@ -667,7 +674,7 @@ void setup_clock(void)
 
 	if(rtc.lostPower())
 	{
-		Serial.println(F("**** RTC Lost Power"));
+		remote_console.println(F("**** RTC Lost Power"));
 		set_clock();
 	}
 }
@@ -681,12 +688,12 @@ void set_clock(void)
 
 	long diff = epoch_ntp - epoch_rtc;
 
-	Serial.print(F("**** RTC reports time as "));
-	Serial.println(epoch_rtc, HEX);
-	Serial.print(F("**** NTP reports time as "));
-	Serial.println(epoch_ntp, HEX);
-	Serial.print(F("**** RTC vs NTP diff is "));
-	Serial.println(diff, HEX);
+	remote_console.print(F("**** RTC reports time as "));
+	remote_console.println(epoch_rtc, HEX);
+	remote_console.print(F("**** NTP reports time as "));
+	remote_console.println(epoch_ntp, HEX);
+	remote_console.print(F("**** RTC vs NTP diff is "));
+	remote_console.println(diff, HEX);
 
 	rtc.adjust(epoch_ntp);
 }
@@ -733,7 +740,7 @@ void setup_wifi(void)
 	}
 
 	Watchdog.reset();
-	Serial.println(F("Waiting 5s for descovery of networks"));
+	remote_console.println(F("Waiting 5s for descovery of networks"));
 	delay(5000);
 	
 	Watchdog.reset();
@@ -754,12 +761,12 @@ void wifi_connect() {
 	int tries = 50;
 	while(WiFi.status() != WL_CONNECTED)
 	{
-		Serial.print(F("Attempting to connect to WPA SSID: "));
-		Serial.println(wifi_ssid);
+		remote_console.print(F("Attempting to connect to WPA SSID: "));
+		remote_console.println(wifi_ssid);
 		WiFi.begin(wifi_ssid, wifi_password);
 		if(--tries == 0)
 		{
-			Serial.println(F("Enabling watchdog"));
+			remote_console.println(F("Enabling watchdog"));
 			Watchdog.enable(WATCHDOG_TIME);
 		}
 		delay(5000);
@@ -769,7 +776,7 @@ void wifi_connect() {
 	Watchdog.enable(WATCHDOG_TIME);
 	
 	// start the WiFi OTA library
-	Serial.println(F("Setup OTA Programming ....."));
+	remote_console.println(F("Setup OTA Programming ....."));
 	WiFiOTA.begin(ota_name, ota_password, InternalStorage);
 }
 
@@ -785,10 +792,10 @@ void mqtt_connect() {
 	int tries = 50;
 	while(!mqtt_client.connected())
 	{
-		Serial.print("Attempting MQTT connection...");
+		remote_console.print("Attempting MQTT connection...");
 		if(mqtt_client.connect(MQTT_CLIENT_NAME))
 		{
-			Serial.println(F("Connected"));
+			remote_console.println(F("Connected"));
 			int i = 0;
 			while(mqtt_subscribe[i] != 0)
 			{
@@ -796,14 +803,14 @@ void mqtt_connect() {
 				i++;
 			}
 		} else {
-			Serial.print(F("Connection failed, rc="));
-			Serial.print(mqtt_client.state());
-			Serial.println(F(" try again in 5 seconds"));
+			remote_console.print(F("Connection failed, rc="));
+			remote_console.print(mqtt_client.state());
+			remote_console.println(F(" try again in 5 seconds"));
 			// Wait 5 seconds before retrying
 			delay(5000);
 			if(--tries == 0)
 			{
-				Serial.println(F("Enabling watchdog"));
+				remote_console.println(F("Enabling watchdog"));
 				Watchdog.enable(WATCHDOG_TIME);
 			}
 		}
@@ -832,19 +839,19 @@ void mqtt_publish_data(const char *pub, uint32_t timestamp, int32_t val, int per
 
 void mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
-	Serial.print(F("**** Message arrived ["));
-	Serial.print(topic);
-	Serial.print(F("] "));
+	remote_console.print(F("**** Message arrived ["));
+	remote_console.print(topic);
+	remote_console.print(F("] "));
 
 	if(!strcmp(topic, mqtt_pump_speed_sp))
 	{
-		Serial.println(F("Setting pump speed"));
+		remote_console.println(F("Setting pump speed"));
 		if(length == 1)
 		{
 			program_data.run_pump_speed = payload[0];
 		}
 	} else if (!strcmp(topic, mqtt_program_sp)) {
-		Serial.println(F("Setting program"));
+		remote_console.println(F("Setting program"));
 		if(length == 1)
 		{
 			program_data.current = (int)(payload[0]);
@@ -898,23 +905,23 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 void wifi_list_networks()
 {
 	// scan for nearby networks:
-	Serial.println("** Scan Networks **");
+	remote_console.println("** Scan Networks **");
 	byte numSsid = WiFi.scanNetworks();
 
 	// print the list of networks seen:
-	Serial.print("number of available networks:");
-	Serial.println(numSsid);
+	remote_console.print("number of available networks:");
+	remote_console.println(numSsid);
 
 	// print the network number and name for each network found:
 	for (int thisNet = 0; thisNet<numSsid; thisNet++) {
-		Serial.print(thisNet);
-		Serial.print(") ");
-		Serial.print(WiFi.SSID(thisNet));
-		Serial.print("\tSignal: ");
-		Serial.print(WiFi.RSSI(thisNet));
-		Serial.print(" dBm");
-		Serial.print("\tEncryption: ");
-		Serial.println(WiFi.encryptionType(thisNet));
+		remote_console.print(thisNet);
+		remote_console.print(") ");
+		remote_console.print(WiFi.SSID(thisNet));
+		remote_console.print("\tSignal: ");
+		remote_console.print(WiFi.RSSI(thisNet));
+		remote_console.print(" dBm");
+		remote_console.print("\tEncryption: ");
+		remote_console.println(WiFi.encryptionType(thisNet));
 	}
 }
 
