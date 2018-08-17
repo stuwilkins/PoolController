@@ -15,15 +15,18 @@ ARDUINO_LIBS += Wire pt100rtd SPI Adafruit_MAX31865_library \
 				PubSubClient NTPClient Adafruit_ASFcore eeprom_i2c \
 				RemoteConsole
 
+OTA_PASSWORD = $(shell cat ota.passwd)
+VERSION=$(shell git describe --tags --always --dirty 2> /dev/null)
+
 include /usr/local/opt/arduino-mk/Sam.mk
 
 #CC = arm-none-eabi-g++
 CXX = arm-none-eabi-g++
-VERSION=$(shell git describe --tags --always --dirty 2> /dev/null)
 $(info VAR="$(VERSION)")
+$(info OTA_PASSWORD="$(OTA_PASSWORD)")
 
 upload-ota : all
 	$(ARDUINO_OTA)/bin/arduinoOTA -address 192.168.1.20 -port 65280 \
-	                              -username arduino -password bHmkHvDM3Ka*^nQz \
+	                              -username arduino -password $(OTA_PASSWORD) \
 								  -sketch build-adafruit_feather_m0/PoolController.bin \
 								  -upload /sketch -b -v
