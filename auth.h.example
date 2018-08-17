@@ -1,0 +1,24 @@
+/*
+ * =====================================================================================
+ *
+ *       Filename:  auth.h
+ *
+ *    Description:  PASSWORDS and AUTH DATA
+ *
+ *        Version:  1.0
+ *        Created:  07/12/2018 18:53:05
+ *       Revision:  none
+ *       Compiler:  gcc
+ *
+ *         Author:  Stuart B. Wilkins (sbw), stuwilkins@mac.com
+ *   Organization:  
+ *
+ * =====================================================================================
+ */
+
+const char* wifi_ssid           = "";
+const char* wifi_password       = "";
+const char* mqtt_server         = "";
+const int mqtt_port             = "";
+static const char* ota_name     = "";
+static const char* ota_password = "";
