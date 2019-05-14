@@ -167,11 +167,9 @@ void setup_wifi(void);
 void wifi_connect();
 void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
         const char* pass, const char* subscribe[]);
-void mqtt_publish_data(const char *pub, uint32_t timestamp, int32_t val, int persist);
-void mqtt_callback(char* topic, byte* payload, unsigned int length);
 void tb_mqtt_callback(char* topic, byte* payload, unsigned int length);
 void write_state(void);
 void wifi_list_networks();
-void tb_publish_readings(PubSubClient *client, DataReadings *readings, uint32_t now);
+void tb_publish_readings(PubSubClient *client, ProgramData *data, DataReadings *readings, uint32_t now);
 
 

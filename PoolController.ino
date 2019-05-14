@@ -62,45 +62,11 @@ EEPROM_I2C eeprom = EEPROM_I2C(0x50);
 WiFiUDP ntp_udp;
 NTPClient ntp_client(ntp_udp, NTP_ADDRESS, NTP_OFFSET, NTP_INTERVAL);
 
-WiFiClient mqtt_wifi_client;
-PubSubClient mqtt_client(mqtt_wifi_client);
 WiFiClient tb_wifi_client;
 PubSubClient tb_mqtt_client(tb_wifi_client);
 
 WiFiUDP syslog_udp;
 Syslog syslog(syslog_udp, SYSLOG_SERVER, SYSLOG_PORT, DEVICE_HOSTNAME, APP_NAME, LOG_KERN);
-
-static const char* mqtt_water_temp     = "homeauto/pool/water_temp";
-static const char* mqtt_air_temp       = "homeauto/pool/air_temp";
-static const char* mqtt_air_humidity   = "homeauto/pool/air_humidity";
-static const char* mqtt_water_level    = "homeauto/pool/water_level";
-static const char* mqtt_flow_switch    = "homeauto/pool/flow_switch";
-static const char* mqtt_uv_index       = "homeauto/pool/uv_index";
-static const char* mqtt_vis            = "homeauto/pool/vis_light";
-static const char* mqtt_ir             = "homeauto/pool/ir_light";
-static const char* mqtt_pump_speed     = "homeauto/pool/pump_speed";
-static const char* mqtt_error          = "homeauto/pool/error";
-static const char* mqtt_pump_pressure  = "homeauto/pool/pump_pressure";
-static const char* mqtt_pump_flow      = "homeauto/pool/pump_flow";
-static const char* mqtt_fill_flow      = "homeauto/pool/fill_flow";
-static const char* mqtt_program        = "homeauto/pool/program";
-static const char* mqtt_prime_flow     = "homeauto/pool/prime_flow";
-static const char* mqtt_prime_pressure = "homeauto/pool/prime_pressure";
-
-static const char* mqtt_pump_speed_sp  = "homeauto/pool/pump_speed_sp";
-static const char* mqtt_program_sp     = "homeauto/pool/program_sp";
-static const char* mqtt_drain_sp       = "homeauto/pool/set_drain_sp";
-static const char* mqtt_fill_sp        = "homeauto/pool/set_fill_sp";
-static const char* mqtt_reset          = "homeauto/pool/reset";
-static const char* mqtt_prime_pump     = "homeauto/pool/prime_pump_sp";
-static const char* mqtt_boost_sp       = "homeauto/pool/boost_sp";
-static const char* mqtt_boost_time_sp  = "homeauto/pool/boost_time_sp";
-static const char* mqtt_boost_speed_sp = "homeauto/pool/boost_speed_sp";
-
-static const char* mqtt_subscribe[]    = {mqtt_pump_speed_sp, mqtt_program_sp, mqtt_drain_sp,
-                                          mqtt_fill_sp, mqtt_reset, mqtt_prime_pump, 
-										  mqtt_boost_sp, mqtt_boost_time_sp, 
-										  mqtt_boost_speed_sp, 0};
 
 static const char* tb_mqtt_subscribe[]  = {"v1/devices/me/rpc/request/+", 0};
 
@@ -180,10 +146,10 @@ void setup() {
     // Now WiFi is up, connect to the syslog console
 	syslog_udp.begin(SYSLOG_PORT);
     syslog.serial(&Serial);
-    //syslog.serialMask(0x7F);
-    //syslog.logMask(0x7F);
-    syslog.serialMask(0xFF);
-    syslog.logMask(0xFF);
+    syslog.serialMask(0x7F);
+    syslog.logMask(0x7F);
+    //syslog.serialMask(0xFF);
+    //syslog.logMask(0xFF);
     syslog.log(LOG_CRIT, "Start Syslog");
 
     // Enter a 2 minute loop to wait for programming if fault
@@ -199,9 +165,7 @@ void setup() {
 
 	Watchdog.reset();  // Pet the dog!
 
-	mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
 	tb_mqtt_client.setServer(TB_MQTT_SERVER, TB_MQTT_PORT);
-	mqtt_client.setCallback(mqtt_callback);
 	tb_mqtt_client.setCallback(tb_mqtt_callback);
     syslog.log(LOG_INFO, "MQTT setup finished");
 	Watchdog.reset();  // Pet the dog!
@@ -310,9 +274,6 @@ void loop() {
     syslog.log(LOG_DEBUG, "wifi_connect()");
 	wifi_connect();
 	Watchdog.reset(); // Pet the dog!
-    syslog.log(LOG_DEBUG, "mqtt_connect()");
-	mqtt_connect(&mqtt_client, MQTT_NAME, NULL, NULL, mqtt_subscribe);
-	Watchdog.reset(); // Pet the dog!
     syslog.log(LOG_DEBUG, "mqtt_connect() (TB)");
 	mqtt_connect(&tb_mqtt_client, TB_MQTT_NAME, TB_MQTT_USERNAME, "", tb_mqtt_subscribe);
 	Watchdog.reset(); // Pet the dog!
@@ -323,20 +284,17 @@ void loop() {
 	Watchdog.reset(); // Pet the dog!
 
 	// Poll for MQTT updates
-    syslog.log(LOG_DEBUG, "mqtt_client.loop()");
-	mqtt_client.loop();
-	Watchdog.reset(); // Pet the dog!
     syslog.log(LOG_DEBUG, "mqtt_client.loop() (TB)");
 	tb_mqtt_client.loop();
 	Watchdog.reset(); // Pet the dog!
     
     // Sync NTP client
-    syslog.log(LOG_DEBUG, "ntp_client.update()");
-    if(!ntp_client.update())
-    {
-        syslog.log(LOG_CRIT, "Unable to update from NTP server");
-    }
-	Watchdog.reset(); // Pet the dog!
+    //syslog.log(LOG_DEBUG, "ntp_client.update()");
+    //if(!ntp_client.update())
+    //{
+    //    syslog.log(LOG_CRIT, "Unable to update from NTP server");
+    //}
+	//Watchdog.reset(); // Pet the dog!
 
 	// Read the current time
     syslog.log(LOG_DEBUG, "Read RTC");
@@ -447,10 +405,7 @@ void loop() {
 		{
 			prime_stop = 0;
 			// store flow and pressure during prime. 
-			mqtt_publish_data(mqtt_prime_pressure, now.unixtime() - NTP_OFFSET,
-				(int32_t)(sensor_readings.pump_pressure), 1);
-			mqtt_publish_data(mqtt_prime_flow, now.unixtime() - NTP_OFFSET,
-				(int32_t)(sensor_readings.pump_flow), 1);
+            // TODO store values
 		}
 
         Watchdog.reset(); // Pet the dog!
@@ -465,13 +420,18 @@ void loop() {
 
     if((now - last_telemetry).totalseconds() >= 10)
     {
-        syslog.log(LOG_DEBUG, "process_telemetry()");
-		process_telemetry(now.unixtime() - NTP_OFFSET);
-        Watchdog.reset(); // Pet the dog!
+        // Flash the L led
+        digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
 
-        //print_readings(&sensor_readings);
-        //Watchdog.reset(); // Pet the dog!
-        last_telemetry = now;
+        // We have a new second
+        // Read pool sensors
+        read_sensors(&sensor_readings);
+        Watchdog.reset();  // Pet the dog!
+
+        // Publish with MQTT
+        tb_publish_readings(&tb_mqtt_client, &program_data, &sensor_readings, 
+                now.unixtime() - NTP_OFFSET);
+        Watchdog.reset();  // Pet the dog!
 	}
 }
 
@@ -522,24 +482,6 @@ void process_eps_pump()
 void process_telemetry(uint32_t now)
 {
 
-	// Flash the L led
-	digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-
-	// We have a new second
-	// Read pool sensors
-	read_sensors(&sensor_readings);
-    Watchdog.reset();  // Pet the dog!
-
-	// Publish with MQTT
-	publish_readings(&sensor_readings, now);
-    Watchdog.reset();  // Pet the dog!
-	tb_publish_readings(&tb_mqtt_client, &sensor_readings, now);
-    Watchdog.reset();  // Pet the dog!
-
-	// Publish current program
-	mqtt_publish_data(mqtt_program, now, 
-			(int32_t)program_data.current, 0);
-    Watchdog.reset();  // Pet the dog!
 }
 
 void read_sensors(DataReadings *readings)
@@ -630,25 +572,7 @@ int32_t get_pump_flow(void)
 	return _int_flow;
 }	
 
-void publish_readings(DataReadings *readings, uint32_t now)
-{
-
-	mqtt_publish_data(mqtt_water_temp, now, (int32_t)(readings->water_temp * 1000), 0);  
-	mqtt_publish_data(mqtt_air_temp, now, (int32_t)(readings->air_temp * 1000), 0);
-	mqtt_publish_data(mqtt_air_humidity, now, (int32_t)(readings->air_humidity * 1000), 0);
-	mqtt_publish_data(mqtt_water_level, now, (int32_t)(readings->water_level), 0);
-	mqtt_publish_data(mqtt_flow_switch, now, (int32_t)(readings->flow_switch), 0);
-	mqtt_publish_data(mqtt_uv_index, now, (int32_t)(readings->uv_index), 0);
-	mqtt_publish_data(mqtt_vis, now, (int32_t)(readings->vis), 0);
-	mqtt_publish_data(mqtt_ir, now, (int32_t)(readings->ir), 0);
-	mqtt_publish_data(mqtt_pump_pressure, now, (int32_t)(readings->pump_pressure), 0);
-	mqtt_publish_data(mqtt_pump_flow, now, (int32_t)(readings->pump_flow), 0);
-	mqtt_publish_data(mqtt_fill_flow, now, (int32_t)(readings->fill_flow), 0);
-	mqtt_publish_data(mqtt_pump_speed, now, (int32_t)pumpSpeeds[readings->pump_speed], 0); 
-	mqtt_publish_data(mqtt_error, now, (int32_t)readings->error_count, 0);
-}
-
-void tb_publish_readings(PubSubClient *client, DataReadings *readings, uint32_t now)
+void tb_publish_readings(PubSubClient *client, ProgramData *data, DataReadings *readings, uint32_t now)
 {
     StaticJsonDocument<JSON_BUFFER_LEN> root;
 
@@ -662,6 +586,8 @@ void tb_publish_readings(PubSubClient *client, DataReadings *readings, uint32_t 
     values["pump_pressure"] = (double)readings->pump_pressure / 100.0;
     values["pump_flow"] = (double)readings->pump_flow / 1000.0;
     values["pump_speed"] = pumpSpeeds[readings->pump_speed];
+    values["pump_speed_val"] = readings->pump_speed;
+    values["program"] = data->current;
 
     root["ts"] = String(now) + "000"; // This gets round the lack of uint64_t conversion
 
@@ -900,26 +826,6 @@ void mqtt_connect(PubSubClient *client, const char* name, const char* uname,
 	Watchdog.enable(WATCHDOG_TIME);
 }
 
-void mqtt_publish_data(const char *pub, uint32_t timestamp, int32_t val, int persist)
-{
-    byte _val[8];
-
-    _val[4] = (val >> 24) & 0xFF;
-    _val[5] = (val >> 16) & 0xFF;
-    _val[6] = (val >> 8) & 0xFF;
-    _val[7] = val & 0xFF;
-
-    _val[0] = (timestamp >> 24) & 0xFF;
-    _val[1] = (timestamp >> 16) & 0xFF;
-    _val[2] = (timestamp >> 8) & 0xFF;
-    _val[3] = timestamp & 0xFF;
-    
-    if(mqtt_client.connected())
-    {
-        mqtt_client.publish(pub, _val, 8, persist);
-    }
-}
-
 void tb_mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
 
@@ -971,67 +877,6 @@ void tb_mqtt_callback(char* topic, byte* payload, unsigned int length)
             syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
         }
     }
-
-}
-
-void mqtt_callback(char* topic, byte* payload, unsigned int length)
-{
-    syslog.logf(LOG_INFO, "MQTT Message arrived [%s]", topic);
-
-	if(!strcmp(topic, mqtt_pump_speed_sp))
-	{
-		if(length == 1)
-		{
-			program_data.run_pump_speed = payload[0];
-		}
-	} else if (!strcmp(topic, mqtt_program_sp)) {
-		if(length == 1)
-		{
-			program_data.current = (int)(payload[0]);
-		}
-	} else if(!strcmp(topic, mqtt_reset)) {
-		if(length == 1)
-		{
-			if(payload[0])
-			{
-				error(F("RESET"));
-			}
-		}
-	} else if(!strcmp(topic, mqtt_prime_pump)) {
-		if(length == 1)
-		{
-			if(payload[0])
-			{
-				program_data.prime = 1;
-			}
-		}
-	} else if(!strcmp(topic, mqtt_boost_sp)) {
-		if(length == 1) 
-		{
-			if(payload[0])
-			{
-				program_data.boost_program = program_data.current;
-				program_data.current = PROGRAM_BOOST;
-				program_data.boost_time = rtc.now() + 
-					TimeSpan(program_data.boost_duration);
-			}
-		}
-	} else if(!strcmp(topic, mqtt_boost_time_sp)) {
-		if(length == 4)
-		{
-			uint32_t _val = 0;
-			_val |= (payload[0] >> 24);
-			_val |= (payload[1] >> 16);
-			_val |= (payload[2] >> 8);
-			_val |= payload[3];
-			program_data.boost_duration = _val;
-		}
-	} else if(!strcmp(topic, mqtt_boost_speed_sp)) {
-		if(length == 1)
-		{
-			program_data.boost_pump_speed = payload[0];
-		}
-	}
 
 }
 
