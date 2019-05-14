@@ -21,9 +21,9 @@
 //
 
 #include <Wire.h>
-#include <avr/pgmspace.h>
 #include <WiFi101.h>
 #include <WiFi101OTA.h>
+#include <WiFiUdp.h>
 #include <Adafruit_SleepyDog.h>
 #include <Adafruit_HTU21DF.h>
 #include <Adafruit_SI1145.h>
@@ -33,11 +33,14 @@
 #include <PubSubClient.h>
 #include <NTPClient.h>
 #include <eeprom_i2c.h>
-#include <RemoteConsole.h>
+#include <Syslog.h>
+#include <ArduinoJson.h>
 
 #include "auth.h"
 #include "PoolController.h"
 #include "timer.h"
+
+#define USE_EEPROM
 
 // Setup other sensors
 Adafruit_HTU21DF htu = Adafruit_HTU21DF();
@@ -46,7 +49,11 @@ Adafruit_MAX31865 max_ts = Adafruit_MAX31865(MAX31865_CS);
 pt100rtd PT100 = pt100rtd();
 
 // Realtime Clock (RTClib)
+#ifdef SOFT_RTC
+RTC_Millis rtc;
+#else
 RTC_DS3231 rtc;
+#endif
 
 // EEPROM
 EEPROM_I2C eeprom = EEPROM_I2C(0x50);
@@ -54,9 +61,14 @@ EEPROM_I2C eeprom = EEPROM_I2C(0x50);
 // WIFI and MQTT setup
 WiFiUDP ntp_udp;
 NTPClient ntp_client(ntp_udp, NTP_ADDRESS, NTP_OFFSET, NTP_INTERVAL);
-RemoteConsole console(10000);
-WiFiClient wifi_client;
-PubSubClient mqtt_client(wifi_client);
+
+WiFiClient mqtt_wifi_client;
+PubSubClient mqtt_client(mqtt_wifi_client);
+WiFiClient tb_wifi_client;
+PubSubClient tb_mqtt_client(tb_wifi_client);
+
+WiFiUDP syslog_udp;
+Syslog syslog(syslog_udp, SYSLOG_SERVER, SYSLOG_PORT, DEVICE_HOSTNAME, APP_NAME, LOG_KERN);
 
 static const char* mqtt_water_temp     = "homeauto/pool/water_temp";
 static const char* mqtt_air_temp       = "homeauto/pool/air_temp";
@@ -72,8 +84,6 @@ static const char* mqtt_pump_pressure  = "homeauto/pool/pump_pressure";
 static const char* mqtt_pump_flow      = "homeauto/pool/pump_flow";
 static const char* mqtt_fill_flow      = "homeauto/pool/fill_flow";
 static const char* mqtt_program        = "homeauto/pool/program";
-static const char* mqtt_loop_time      = "homeauto/pool/loop_time";
-static const char* mqtt_uptime         = "homeauto/pool/uptime";
 static const char* mqtt_prime_flow     = "homeauto/pool/prime_flow";
 static const char* mqtt_prime_pressure = "homeauto/pool/prime_pressure";
 
@@ -92,14 +102,14 @@ static const char* mqtt_subscribe[]    = {mqtt_pump_speed_sp, mqtt_program_sp, m
 										  mqtt_boost_sp, mqtt_boost_time_sp, 
 										  mqtt_boost_speed_sp, 0};
 
-
+static const char* tb_mqtt_subscribe[]  = {"v1/devices/me/rpc/request/+", 0};
 
 // Data Readings
 DataReadings sensor_readings;
 DateTime last;
+DateTime last_telemetry;
 DateTime restart_pump;
 int prime_stop = 0;
-uint32_t uptime;
 
 // Running program
 ProgramData program_data;
@@ -144,54 +154,81 @@ void setup() {
 	pinMode(PUMP_FLOW_PIN, INPUT_PULLUP);
 	pinMode(FILL_FLOW_PIN, INPUT_PULLUP);
 
-	console.begin(115200, 0);
+    set_pump_stop(1);
 
+	Serial.begin(115200, 0);
+    unsigned long t = millis();
+    while(((millis() - t) < 10000) && !Serial){
+        delay(1000);
+    }
+        
 	// Set the L led hight to show we are configuring
 	digitalWrite(OUTPUT_LED_L, HIGH);
 
 	int countdownMS = Watchdog.enable(WATCHDOG_TIME);
-	console.print("Enabled the watchdog with max countdown of ");
-	console.print(countdownMS, DEC);
-	console.println(" milliseconds!");
-	console.println();
+	Serial.print("Enabled the watchdog with max countdown of ");
+	Serial.print(countdownMS, DEC);
+	Serial.println(" milliseconds!");
+	Serial.println();
 
 	// Setup WIFI
 
-	console.println(F("Setup WIFI ...."));
+	Serial.println(F("Setup WIFI ...."));
 	setup_wifi();
 	wifi_connect();
-	console.connect();
+
+    // Now WiFi is up, connect to the syslog console
+	syslog_udp.begin(SYSLOG_PORT);
+    syslog.serial(&Serial);
+    //syslog.serialMask(0x7F);
+    //syslog.logMask(0x7F);
+    syslog.serialMask(0xFF);
+    syslog.logMask(0xFF);
+    syslog.log(LOG_CRIT, "Start Syslog");
+
+    // Enter a 2 minute loop to wait for programming if fault
+    syslog.log(LOG_CRIT, "Entering upload window");
+    unsigned long _t = millis();
+    while((millis() - _t) < UPLOAD_WINDOW)
+    {
+        WiFiOTA.poll();
+        Watchdog.reset();  // Pet the dog!
+        delay(250);
+    }
+    syslog.log(LOG_CRIT, "Upload window ended");
+
 	Watchdog.reset();  // Pet the dog!
 
-	console.println(F("Setup MQTT ...."));
 	mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
+	tb_mqtt_client.setServer(TB_MQTT_SERVER, TB_MQTT_PORT);
 	mqtt_client.setCallback(mqtt_callback);
-	mqtt_connect();
+	tb_mqtt_client.setCallback(tb_mqtt_callback);
+    syslog.log(LOG_INFO, "MQTT setup finished");
 	Watchdog.reset();  // Pet the dog!
 
-	console.println(F("Setup NTP for time ...."));
 	ntp_client.begin();
+    syslog.log(LOG_INFO, "NTP time setup finished");
 	Watchdog.reset();
 
 	// Setup Sensors
-	console.println(F("Setup Sensors ...."));
 	setup_sensors();
+    syslog.log(LOG_INFO, "Sensor setup finished");
 	Watchdog.reset();  // Pet the dog!
 
+#ifdef USE_EEPROM
 	// Setup eeprom
-	console.println(F("Setup eeprom ...."));
 	eeprom.begin();
+    syslog.log(LOG_INFO, "EEPROM setup finished");
+#endif
 
 	// Setup RTC
-	console.print(F("Setup RTC ...."));
 	setup_clock();
-	console.println(F(" DONE"));
+    syslog.log(LOG_INFO, "RTC setup finished");
 	Watchdog.reset();  // Pet the dog!
-	uptime = rtc.now().unixtime() - NTP_OFFSET;
-	mqtt_client.publish(mqtt_uptime, (uint8_t*)(&uptime), sizeof(uptime), 1); 
 
 	// Set defaults
 	last = rtc.now();
+	last_telemetry = rtc.now();
 	sensor_readings.error_count = 0;
 	pump_flow.last = millis();
 	pump_flow.clicks = 0;
@@ -207,10 +244,16 @@ void setup() {
 	program_data.boost_duration = 60 * 30; // 30m
 	program_data.boost_counter = 0;
 
+    syslog.log(LOG_INFO, "Default setup finished");
+
+#ifdef USE_EEPROM
 	// Now restore from memory
 	eeprom_read();
+#endif
 
 	// Setup ISR
+    syslog.log(LOG_INFO, "Setup interrupts");
+
 	attachInterrupt(digitalPinToInterrupt(PUMP_FLOW_PIN), 
 					pump_flow_ISR, FALLING);	
 	attachInterrupt(digitalPinToInterrupt(FILL_FLOW_PIN), 
@@ -218,6 +261,8 @@ void setup() {
 
 	// Set L low to show we are initialized.
 	digitalWrite(OUTPUT_LED_L, LOW);
+
+    syslog.log(LOG_INFO, "End of setup()");
 }
 
 bool eeprom_write(void)
@@ -235,21 +280,20 @@ bool eeprom_read(void)
 	uint32_t magic;
 	if(eeprom.read(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
 	{
-		console.println(F("Unable to read MAGIC from EEPROM"));
+		syslog.log(LOG_ERR, "Unable to read MAGIC from EEPROM");
 		return false;
 	}
 
 	if(magic != EEPROM_MAGIC)
 	{
-		console.println(F("EEPROM Magic does not match"));
+		syslog.log(LOG_ERR, "EPROM Magic does not match");
 		return false;
 	}
 
 	int rc;
 	if((rc = eeprom.read(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true)))
 	{
-		console.print(F("Failed to read EEPROM Data rc = "));
-		console.println(rc);
+		syslog.logf(LOG_ERR, "Failed to read EEPROM Data rc = %d", rc);
 		return false;
 	}
 
@@ -258,26 +302,46 @@ bool eeprom_read(void)
 
 void loop() {
 	DateTime now;
-	unsigned long start_millis = millis();
 
 	// Pet the dog!
 	Watchdog.reset();
 
 	// Do WIFI and MQTT Connection
+    syslog.log(LOG_DEBUG, "wifi_connect()");
 	wifi_connect();
-	mqtt_connect();
+	Watchdog.reset(); // Pet the dog!
+    syslog.log(LOG_DEBUG, "mqtt_connect()");
+	mqtt_connect(&mqtt_client, MQTT_NAME, NULL, NULL, mqtt_subscribe);
+	Watchdog.reset(); // Pet the dog!
+    syslog.log(LOG_DEBUG, "mqtt_connect() (TB)");
+	mqtt_connect(&tb_mqtt_client, TB_MQTT_NAME, TB_MQTT_USERNAME, "", tb_mqtt_subscribe);
+	Watchdog.reset(); // Pet the dog!
 
 	// Poll for over the air updates
+    syslog.log(LOG_DEBUG, "WiFiOTA.poll() (TB)");
 	WiFiOTA.poll();
+	Watchdog.reset(); // Pet the dog!
 
 	// Poll for MQTT updates
+    syslog.log(LOG_DEBUG, "mqtt_client.loop()");
 	mqtt_client.loop();
-
-	// Loop through the remote colsole....
-	console.loop();
+	Watchdog.reset(); // Pet the dog!
+    syslog.log(LOG_DEBUG, "mqtt_client.loop() (TB)");
+	tb_mqtt_client.loop();
+	Watchdog.reset(); // Pet the dog!
+    
+    // Sync NTP client
+    syslog.log(LOG_DEBUG, "ntp_client.update()");
+    if(!ntp_client.update())
+    {
+        syslog.log(LOG_CRIT, "Unable to update from NTP server");
+    }
+	Watchdog.reset(); // Pet the dog!
 
 	// Read the current time
+    syslog.log(LOG_DEBUG, "Read RTC");
 	now = rtc.now();
+	Watchdog.reset(); // Pet the dog!
 
 	if(now.hour() != last.hour())
 	{
@@ -299,9 +363,11 @@ void loop() {
 	}
 
 	// Every second call poll
-	if(now.second() != last.second())
+	if((now - last).totalseconds() >= 1) 
 	{
 		// Now check for running programs
+        
+        syslog.logf(LOG_DEBUG, "Program = %d", program_data.current);
 
 		if(program_data.current == PROGRAM_TIMER)
 		{
@@ -314,8 +380,7 @@ void loop() {
 		{
 			// Check if time is up
 			int32_t delta = (program_data.boost_time - now).totalseconds();
-			console.print(F("BOOST Delta = "));
-			console.println(delta);
+            syslog.logf("BOOST Delta = %ld", delta);
 			if(delta <= 0)
 			{
 				// We are done
@@ -355,6 +420,7 @@ void loop() {
 			if(get_pump_speed() != program_data.run_pump_speed)
 			{
 				set_pump_speed(program_data.run_pump_speed);
+                syslog.logf(LOG_INFO, "Set pump speed to : %d", program_data.run_pump_speed);
 			}
 		}
 		
@@ -370,8 +436,6 @@ void loop() {
 				set_pump_stop(1);
 			}
 		}
-
-		process_telemetry(now.unixtime() - NTP_OFFSET);
 
 		if((prime_stop == 1) && ((now - restart_pump).totalseconds() > 30))
 		{
@@ -389,14 +453,26 @@ void loop() {
 				(int32_t)(sensor_readings.pump_flow), 1);
 		}
 
-		mqtt_publish_data(mqtt_loop_time, now.unixtime() - NTP_OFFSET, 
-				(int32_t)(millis() - start_millis), 0);
+        Watchdog.reset(); // Pet the dog!
 
+#ifdef USE_EEPROM
+        syslog.log(LOG_DEBUG, "eeprom_write()");
 		eeprom_write();
-	}
+        Watchdog.reset(); // Pet the dog!
+#endif
+        last = now;
+    }
 
-	// Store last time
-	last = now;
+    if((now - last_telemetry).totalseconds() >= 10)
+    {
+        syslog.log(LOG_DEBUG, "process_telemetry()");
+		process_telemetry(now.unixtime() - NTP_OFFSET);
+        Watchdog.reset(); // Pet the dog!
+
+        //print_readings(&sensor_readings);
+        //Watchdog.reset(); // Pet the dog!
+        last_telemetry = now;
+	}
 }
 
 void process_eps_pump()
@@ -417,7 +493,7 @@ void process_eps_pump()
 		// First notice, set timeout
 		flow_time = millis();
 		flow_error = true;
-		console.println(F("*** EPS : Flow error detected, timer started"));
+		syslog.log(LOG_ERR, "EPS : Flow error detected, timer started");
 	}
 
 	if(flow_error)
@@ -427,18 +503,18 @@ void process_eps_pump()
 			if(error)
 			{
 				// We are in an error state
-				console.println(F("*** EPS : Flow error")); 
+				syslog.log(LOG_ERR, "EPS : Flow error"); 
 				set_pump_stop(1);
 				set_pump_speed(0);
 				program_data.current = PROGRAM_HALT;
 			} else {
 				// the error cleared. 
-				console.println(F("*** EPS : Resetting flow error"));
+				syslog.log(LOG_ERR, "EPS : Resetting flow error");
 				flow_error = false;
 			}
 		} else {
-			console.print(F("** EPS : Countdown = "));
-			console.println(EPS_PUMP_FLOW_TIMEOUT - (millis() - flow_time));
+            syslog.logf(LOG_DEBUG, "EPS : Countdown = %ld", 
+                     (EPS_PUMP_FLOW_TIMEOUT - (millis() - flow_time)));
 		}
 	}
 }
@@ -452,26 +528,26 @@ void process_telemetry(uint32_t now)
 	// We have a new second
 	// Read pool sensors
 	read_sensors(&sensor_readings);
-
-	print_readings(&sensor_readings);
+    Watchdog.reset();  // Pet the dog!
 
 	// Publish with MQTT
 	publish_readings(&sensor_readings, now);
+    Watchdog.reset();  // Pet the dog!
+	tb_publish_readings(&tb_mqtt_client, &sensor_readings, now);
+    Watchdog.reset();  // Pet the dog!
 
 	// Publish current program
 	mqtt_publish_data(mqtt_program, now, 
 			(int32_t)program_data.current, 0);
+    Watchdog.reset();  // Pet the dog!
 }
 
 void read_sensors(DataReadings *readings)
 {
-	//readings->air_temp = htu.readTemperature();
-	//readings->air_humidity = htu.readHumidity();
-
 	uint8_t fault = max_ts.readFault();
 	if(fault)
 	{
-		console.print("Fault 0x"); console.println(fault, HEX);
+        syslog.logf(LOG_CRIT, "RTD Fault = %d", fault);
 		max_ts.clearFault();
 		readings->water_temp = 0.0;
 	} else {
@@ -502,7 +578,7 @@ void read_sensors(DataReadings *readings)
 			(readings->ir == 0))
 	{
 		readings->error_count++;
-		console.println(F("**** Resetting UV sensor"));
+        syslog.log(LOG_ALERT, "Resetting UV sensor");
 		uv.begin();
 		delay(100);
 		readings->uv_index = uv.readUV();
@@ -572,68 +648,69 @@ void publish_readings(DataReadings *readings, uint32_t now)
 	mqtt_publish_data(mqtt_error, now, (int32_t)readings->error_count, 0);
 }
 
+void tb_publish_readings(PubSubClient *client, DataReadings *readings, uint32_t now)
+{
+    StaticJsonDocument<JSON_BUFFER_LEN> root;
+
+    JsonObject values = root.createNestedObject("values");
+    values["water_temp"] = readings->water_temp;
+    values["flow_switch"] = readings->flow_switch;
+    values["uv_index"] = (double)readings->uv_index / 100.0;
+    values["ir_light"] = readings->ir;
+    values["visible_light"] = readings->vis;
+    values["water_level"] = (double)readings->water_level / 100.0;
+    values["pump_pressure"] = (double)readings->pump_pressure / 100.0;
+    values["pump_flow"] = (double)readings->pump_flow / 1000.0;
+    values["pump_speed"] = pumpSpeeds[readings->pump_speed];
+
+    root["ts"] = String(now) + "000"; // This gets round the lack of uint64_t conversion
+
+    char buffer[JSON_BUFFER_LEN];
+    serializeJson(root, buffer, JSON_BUFFER_LEN);
+
+    if(client->connected())
+    {
+        client->publish("v1/devices/me/telemetry", buffer, false);
+        //syslog.logf(LOG_INFO, "thingsboard upload = %s strlen = %d", buffer, strlen(buffer));
+    } else {
+        syslog.log(LOG_ERR, "Unable to publish to thingsboard - not connected");
+    }
+}
+
 void print_readings(DataReadings *readings)
 {
 
-    console.print(F("Water Temp : "));
-    console.print(readings->water_temp);
-    console.println(F(" degC\t\t"));
-    console.print(F("Air Temperature "));
-    console.print(readings->air_temp);
-    console.println(F(" degC\t\t"));
-    console.print(F("Air Humidity "));
-    console.print(readings->air_humidity);
-    console.println(F("%\t\t"));
-    console.print(F("Water Level "));
-    console.print(readings->water_level);
-    console.println(F("%\t\t"));
-    console.print(F("Flow "));
-
+    syslog.logf(LOG_DEBUG, "Water Temp             : %f degC", readings->water_temp);
+    syslog.logf(LOG_DEBUG, "Water Level            : %ld", readings->water_level);
     if(readings->flow_switch)
     {
-        console.print(F("ON "));
+        syslog.log(LOG_DEBUG, "Flow Switch            : ON");
     } else {
-        console.print(F("OFF"));
+        syslog.log(LOG_DEBUG, "Flow Switch            : OFF");
     }
 
-    console.println("");
-    console.print(F("UV "));
-    console.print(((float)readings->uv_index) / 100);
-    console.println("");
-    console.print(F("VIS "));
-    console.print(readings->vis);
-    console.println("");
-    console.print(F("IR "));
-    console.print(readings->ir);
-    console.println("");
-    console.print(F("Speed "));
-    console.print(readings->pump_speed);
-    console.print(F(" "));
-    console.println(pumpSpeeds[readings->pump_speed]);
-	console.print(F("Pump Flow Rate "));
-	console.print(readings->pump_flow);
-	console.println(F(" *1000 GPM"));
+    syslog.logf(LOG_DEBUG, "UV Sensor              : %f %ld %ld", 
+            (float)readings->uv_index / 100,
+            readings->vis,
+            readings->ir);
+    syslog.logf(LOG_DEBUG, "Speed                  : %ld (%d)", readings->pump_speed,
+            pumpSpeeds[readings->pump_speed]);
+    syslog.logf(LOG_DEBUG, "Flow rate              : %f GPM", (float)readings->pump_flow / 1000);
 
 }
 
 void setup_sensors(void)
 {
-	// Setup HTU21D-F
-
-	//if (!htu.begin()) {
-	//	error(F("Could not find HTU21D-F"));
-	//}
-
 	// Setup SI1145
 	if(!uv.begin()) 
 	{
-		//error(F("Could not find SI1145"));
+        syslog.log(LOG_CRIT, "Unable to initialize SI1145 sensor");
 	}
 
 	// Setup MAX31865	
 	if(!max_ts.begin(MAX31865_3WIRE))
 	{
-		error(F("Unable to set MAX31865"));
+        syslog.log(LOG_CRIT, "Unable to initialize MAX31865 sensor");
 	}
 }
 
@@ -666,32 +743,37 @@ int32_t get_pump_pressure(void)
 
 void setup_clock(void)
 { 
+#ifdef SOFT_RTC
+	rtc.begin(DateTime(F(__DATE__), F(__TIME__)));
+    set_clock();
+#else
 	if(!rtc.begin()) {
-		error(F("Couldn't find RTC"));
+		syslog.log(LOG_CRIT, "Unable to start RTC");
 	}
 
 	if(rtc.lostPower())
 	{
-		console.println(F("**** RTC Lost Power"));
+		syslog.log(LOG_ALERT, "RTC Lost Power");
 		set_clock();
 	}
+#endif
 }
 
 void set_clock(void)
 {
-	ntp_client.update();
+	if(!ntp_client.forceUpdate())
+    {
+        syslog.logf(LOG_CRIT, "Unable to update time from NTP Server");
+    }
 	DateTime now = rtc.now();
 	unsigned long epoch_ntp = ntp_client.getEpochTime();
 	unsigned long epoch_rtc = now.unixtime();
 
 	long diff = epoch_ntp - epoch_rtc;
 
-	console.print(F("**** RTC reports time as "));
-	console.println(epoch_rtc, HEX);
-	console.print(F("**** NTP reports time as "));
-	console.println(epoch_ntp, HEX);
-	console.print(F("**** RTC vs NTP diff is "));
-	console.println(diff, HEX);
+    syslog.logf(LOG_INFO, "RTC reports time as %ld", epoch_rtc);
+    syslog.logf(LOG_INFO, "NTP reports time as %ld", epoch_ntp);
+    syslog.logf(LOG_INFO, "RTC vs NTP diff is %ld", diff);
 
 	rtc.adjust(epoch_ntp);
 }
@@ -738,7 +820,7 @@ void setup_wifi(void)
 	}
 
 	Watchdog.reset();
-	console.println(F("Waiting 5s for descovery of networks"));
+	Serial.println("Waiting 5s for descovery of networks");
 	delay(5000);
 	
 	Watchdog.reset();
@@ -759,12 +841,12 @@ void wifi_connect() {
 	int tries = 50;
 	while(WiFi.status() != WL_CONNECTED)
 	{
-		console.print(F("Attempting to connect to WPA SSID: "));
-		console.println(wifi_ssid);
-		WiFi.begin(wifi_ssid, wifi_password);
+		Serial.print("Attempting to connect to WPA SSID: ");
+		Serial.println(WIFI_SSID);
+		WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
 		if(--tries == 0)
 		{
-			console.println(F("Enabling watchdog"));
+			Serial.println("Enabling watchdog");
 			Watchdog.enable(WATCHDOG_TIME);
 		}
 		delay(5000);
@@ -772,47 +854,47 @@ void wifi_connect() {
 
 	// Re-enable the watchdog
 	Watchdog.enable(WATCHDOG_TIME);
+
+    // Print info
+    Serial.print("IP Address = ");
+    Serial.println(WiFi.localIP());
 	
 	// start the WiFi OTA library
-	console.println(F("Setup OTA Programming ....."));
-	WiFiOTA.begin(ota_name, ota_password, InternalStorage);
+	Serial.println("Setup OTA Programming.");
+	WiFiOTA.begin(OTA_NAME, OTA_PASSWORD, InternalStorage);
 }
 
-void mqtt_connect() {
+void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
+        const char* pass, const char* subscribe[]) {
 
-	if(mqtt_client.connected())
+	if(client->connected())
 	{
 		return;
 	}
 
 	Watchdog.disable();
 
-	int tries = 50;
-	while(!mqtt_client.connected())
-	{
-		console.print("Attempting MQTT connection...");
-		if(mqtt_client.connect(MQTT_CLIENT_NAME))
-		{
-			console.println(F("Connected"));
-			int i = 0;
-			while(mqtt_subscribe[i] != 0)
-			{
-				mqtt_client.subscribe(mqtt_subscribe[i], 1);
-				i++;
-			}
-		} else {
-			console.print(F("Connection failed, rc="));
-			console.print(mqtt_client.state());
-			console.println(F(" try again in 5 seconds"));
-			// Wait 5 seconds before retrying
-			delay(5000);
-			if(--tries == 0)
-			{
-				console.println(F("Enabling watchdog"));
-				Watchdog.enable(WATCHDOG_TIME);
-			}
-		}
-	}
+    syslog.log(LOG_INFO, "Attempting MQTT connection");
+    bool c;
+    if(uname != NULL)
+    {
+        c = client->connect(name, uname, pass);
+    } else {
+        c = client->connect(name);
+    }
+    if(c)
+    {
+        syslog.logf(LOG_INFO, "Connected to MQTT server name %s", name);
+        int i = 0;
+        while(subscribe[i] != 0)
+        {
+            client->subscribe(subscribe[i], 1);
+            i++;
+        }
+    } else {
+        syslog.logf(LOG_CRIT, "MQTT Connection failed to %s rc=%d",
+                name, client->state());
+    }
 
 	// Re-enable the watchdog
 	Watchdog.enable(WATCHDOG_TIME);
@@ -831,25 +913,78 @@ void mqtt_publish_data(const char *pub, uint32_t timestamp, int32_t val, int per
     _val[1] = (timestamp >> 16) & 0xFF;
     _val[2] = (timestamp >> 8) & 0xFF;
     _val[3] = timestamp & 0xFF;
+    
+    if(mqtt_client.connected())
+    {
+        mqtt_client.publish(pub, _val, 8, persist);
+    }
+}
 
-    mqtt_client.publish(pub, _val, 8, persist);
+void tb_mqtt_callback(char* topic, byte* payload, unsigned int length)
+{
+
+    if(!length)
+    {
+        syslog.log(LOG_ERR, "Invalid tb_mqtt callback");
+    }
+
+    char buffer[256];
+    strncpy(buffer, (char*)payload, length);
+    payload[length] = 0;
+    syslog.logf(LOG_INFO, "TB MQTT Message arrived [%s] %s", topic, (char *)payload);
+
+    StaticJsonDocument<JSON_BUFFER_LEN> json;
+    DeserializationError error = deserializeJson(json, (char*)payload);
+
+    if(error)
+    {
+        syslog.logf(LOG_ERR, "deserializeJson() failed: %s", error.c_str());
+        return;
+    } 
+
+    const char* method = json["method"];
+
+    if(!strcmp(method, "setPumpSpeed"))
+    {
+        int speed = json["params"];
+        syslog.logf(LOG_INFO, "Setting pump speed to %d", speed);
+        program_data.run_pump_speed = speed;
+    } else if(!strcmp(method, "setRunProgramValue")) {
+        int val = json["params"];
+        if(val)
+        {
+            program_data.current = PROGRAM_RUN;
+            syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
+        }
+    } else if(!strcmp(method, "setHaltProgramValue")) {
+        int val = json["params"];
+        if(val)
+        {
+            program_data.current = PROGRAM_HALT;
+            syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
+        }
+    } else if(!strcmp(method, "setDrainProgramValue")) {
+        int val = json["params"];
+        if(val)
+        {
+            program_data.current = PROGRAM_DRAIN;
+            syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
+        }
+    }
+
 }
 
 void mqtt_callback(char* topic, byte* payload, unsigned int length)
 {
-	console.print(F("**** Message arrived ["));
-	console.print(topic);
-	console.print(F("] "));
+    syslog.logf(LOG_INFO, "MQTT Message arrived [%s]", topic);
 
 	if(!strcmp(topic, mqtt_pump_speed_sp))
 	{
-		console.println(F("Setting pump speed"));
 		if(length == 1)
 		{
 			program_data.run_pump_speed = payload[0];
 		}
 	} else if (!strcmp(topic, mqtt_program_sp)) {
-		console.println(F("Setting program"));
 		if(length == 1)
 		{
 			program_data.current = (int)(payload[0]);
@@ -903,23 +1038,23 @@ void mqtt_callback(char* topic, byte* payload, unsigned int length)
 void wifi_list_networks()
 {
 	// scan for nearby networks:
-	console.println("** Scan Networks **");
+	Serial.println("** Scan Networks **");
 	byte numSsid = WiFi.scanNetworks();
 
 	// print the list of networks seen:
-	console.print("number of available networks:");
-	console.println(numSsid);
+	Serial.print("number of available networks:");
+	Serial.println(numSsid);
 
 	// print the network number and name for each network found:
 	for (int thisNet = 0; thisNet<numSsid; thisNet++) {
-		console.print(thisNet);
-		console.print(") ");
-		console.print(WiFi.SSID(thisNet));
-		console.print("\tSignal: ");
-		console.print(WiFi.RSSI(thisNet));
-		console.print(" dBm");
-		console.print("\tEncryption: ");
-		console.println(WiFi.encryptionType(thisNet));
+		Serial.print(thisNet);
+		Serial.print(") ");
+		Serial.print(WiFi.SSID(thisNet));
+		Serial.print("\tSignal: ");
+		Serial.print(WiFi.RSSI(thisNet));
+		Serial.print(" dBm");
+		Serial.print("\tEncryption: ");
+		Serial.println(WiFi.encryptionType(thisNet));
 	}
 }
 

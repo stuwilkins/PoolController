@@ -17,15 +17,18 @@
  */
 
 
+// Buffer lengths
+#define JSON_BUFFER_LEN                     500
+
 // Analog input for level meter
 
 #define MAX31865_CS                         19
 #define MAX31865_RREF                       430.0
 #define MAX31865_RNOMINAL                   100.0
 
-#define WATER_LEVEL_PIN			                A0
-#define WATER_LEVEL_X     		              79.69
-#define WATER_LEVEL_C     		              -36455
+#define WATER_LEVEL_PIN		                A0
+#define WATER_LEVEL_X     	                79.69
+#define WATER_LEVEL_C     	                -36455
 
 #define PUMP_PRESSURE_PIN                   A1
 #define PUMP_PRESSURE_CONV                  13200
@@ -59,8 +62,6 @@
 #define EEPROM_MAGIC_DATA                   0
 #define EEPROM_MAGIC                        0xDEADF00D
 
-#define MQTT_SERVER                         "192.168.1.2"
-#define MQTT_PORT                           1883
 #define MQTT_CLIENT_NAME                    "pool_controller"
 
 #define NTP_ADDRESS                         "north-america.pool.ntp.org"
@@ -70,6 +71,8 @@
 #define PROGRAM_LEVEL_TARGET                25500
 #define PROGRAM_PUMP_RUN_SPEED              3
 #define PROGRAM_PUMP_DRAIN_SPEED            7
+
+#define UPLOAD_WINDOW                       60000
 
 // Programs to run
 enum programs {
@@ -162,10 +165,13 @@ void set_pump_stop(bool stop);
 bool get_pump_stop();
 void setup_wifi(void);
 void wifi_connect();
-void mqtt_connect();
+void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
+        const char* pass, const char* subscribe[]);
 void mqtt_publish_data(const char *pub, uint32_t timestamp, int32_t val, int persist);
 void mqtt_callback(char* topic, byte* payload, unsigned int length);
+void tb_mqtt_callback(char* topic, byte* payload, unsigned int length);
 void write_state(void);
 void wifi_list_networks();
+void tb_publish_readings(PubSubClient *client, DataReadings *readings, uint32_t now);
 
 
