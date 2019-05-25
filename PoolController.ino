@@ -25,8 +25,6 @@
 #include <WiFi101OTA.h>
 #include <WiFiUdp.h>
 #include <Adafruit_SleepyDog.h>
-#include <Adafruit_HTU21DF.h>
-#include <Adafruit_SI1145.h>
 #include <Adafruit_MAX31865.h>
 #include <pt100rtd.h>
 #include <RTClib.h>
@@ -35,17 +33,19 @@
 #include <eeprom_i2c.h>
 #include <Syslog.h>
 #include <ArduinoJson.h>
+#include <Adafruit_MCP23008.h>
 
-#include "auth.h"
 #include "PoolController.h"
+#include "auth.h"
 #include "timer.h"
+#include "program.h"
 
-#define USE_EEPROM
+#define USE_EEPROM 1
 
-// Setup other sensors
-Adafruit_HTU21DF htu = Adafruit_HTU21DF();
-Adafruit_SI1145 uv = Adafruit_SI1145();
-Adafruit_MAX31865 max_ts = Adafruit_MAX31865(MAX31865_CS);
+// Setup Sensors
+Adafruit_MAX31865 water_pt100 = Adafruit_MAX31865(MAX31865_CS);
+
+// PT100 Conversion Routines
 pt100rtd PT100 = pt100rtd();
 
 // Realtime Clock (RTClib)
@@ -62,6 +62,8 @@ EEPROM_I2C eeprom = EEPROM_I2C(0x50);
 WiFiUDP ntp_udp;
 NTPClient ntp_client(ntp_udp, NTP_ADDRESS, NTP_OFFSET, NTP_INTERVAL);
 
+WiFiClient wifi_client;
+PubSubClient mqtt_client(wifi_client);
 WiFiClient tb_wifi_client;
 PubSubClient tb_mqtt_client(tb_wifi_client);
 
@@ -69,6 +71,7 @@ WiFiUDP syslog_udp;
 Syslog syslog(syslog_udp, SYSLOG_SERVER, SYSLOG_PORT, DEVICE_HOSTNAME, APP_NAME, LOG_KERN);
 
 static const char* tb_mqtt_subscribe[]  = {"v1/devices/me/rpc/request/+", 0};
+static const char* mqtt_subscribe[]  = {"home/poolcontroller/request/+", 0};
 
 // Data Readings
 DataReadings sensor_readings;
@@ -79,10 +82,13 @@ int prime_stop = 0;
 
 // Running program
 ProgramData program_data;
+unsigned long loop_time_millis;
 
 // ISR Data
 volatile PumpFlowRate pump_flow;
 volatile PumpFlowRate fill_flow;
+volatile bool flow_switch;
+volatile unsigned long flow_switch_millis;
 
 // Error handler which pauses and flashes the L led. 
 void error(const __FlashStringHelper *err) {
@@ -95,6 +101,18 @@ void error(const __FlashStringHelper *err) {
 }
 
 // ISR Routines for flow rate meters
+
+void flow_switch_ISR()
+{
+    if(!digitalRead(FLOW_SWITCH))
+    {
+       flow_switch = true;
+       flow_switch_millis = millis();
+    } else {
+       flow_switch = false;
+       flow_switch_millis = millis();
+    }
+}
 
 void pump_flow_ISR()
 {
@@ -131,15 +149,10 @@ void setup() {
 	// Set the L led hight to show we are configuring
 	digitalWrite(OUTPUT_LED_L, HIGH);
 
-	int countdownMS = Watchdog.enable(WATCHDOG_TIME);
-	Serial.print("Enabled the watchdog with max countdown of ");
-	Serial.print(countdownMS, DEC);
-	Serial.println(" milliseconds!");
-	Serial.println();
+    int countdownMS = Watchdog.enable(WATCHDOG_TIME);
 
 	// Setup WIFI
 
-	Serial.println(F("Setup WIFI ...."));
 	setup_wifi();
 	wifi_connect();
 
@@ -148,12 +161,18 @@ void setup() {
     syslog.serial(&Serial);
     syslog.serialMask(0x7F);
     syslog.logMask(0x7F);
-    //syslog.serialMask(0xFF);
-    //syslog.logMask(0xFF);
-    syslog.log(LOG_CRIT, "Start Syslog");
+    syslog.log(LOG_CRIT, "setup()");
+    syslog.logf(LOG_CRIT, "VERSION = %s", VERSION);
+    syslog.logf(LOG_CRIT, "Watchdog time %d miliseconds", countdownMS);
 
-    // Enter a 2 minute loop to wait for programming if fault
-    syslog.log(LOG_CRIT, "Entering upload window");
+	// start the WiFi OTA library
+	syslog.log("Setup OTA Updates");
+	WiFiOTA.begin(OTA_NAME, OTA_PASSWORD, InternalStorage);
+
+	Watchdog.reset();  // Pet the dog!
+    
+    // Enter a loop to wait for programming if fault
+    syslog.logf(LOG_CRIT, "Entering upload window (%d ms)", UPLOAD_WINDOW);
     unsigned long _t = millis();
     while((millis() - _t) < UPLOAD_WINDOW)
     {
@@ -165,8 +184,10 @@ void setup() {
 
 	Watchdog.reset();  // Pet the dog!
 
+	mqtt_client.setServer(MQTT_SERVER, MQTT_PORT);
+	mqtt_client.setCallback(tb_rpc_callback);
 	tb_mqtt_client.setServer(TB_MQTT_SERVER, TB_MQTT_PORT);
-	tb_mqtt_client.setCallback(tb_mqtt_callback);
+	tb_mqtt_client.setCallback(tb_rpc_callback);
     syslog.log(LOG_INFO, "MQTT setup finished");
 	Watchdog.reset();  // Pet the dog!
 
@@ -193,20 +214,31 @@ void setup() {
 	// Set defaults
 	last = rtc.now();
 	last_telemetry = rtc.now();
+
 	sensor_readings.error_count = 0;
+	sensor_readings.valid = false;
+
 	pump_flow.last = millis();
 	pump_flow.clicks = 0;
+
 	fill_flow.last = millis();
 	fill_flow.clicks = 0;
+
+    flow_switch_millis = millis();
+    flow_switch = !digitalRead(FLOW_SWITCH);
+
 	program_data.current = PROGRAM_RUN;
 	program_data.level_target = PROGRAM_LEVEL_TARGET;
 	program_data.run_pump_speed = PROGRAM_PUMP_RUN_SPEED;
 	program_data.drain_pump_speed = PROGRAM_PUMP_DRAIN_SPEED;
 	program_data.prime = 0;
 	program_data.boost_time = last;
-	program_data.boost_pump_speed = 6;
-	program_data.boost_duration = 60 * 30; // 30m
+	program_data.boost_pump_speed = 7;
+	program_data.boost_duration = 60 * 60 * 8; // 30m
 	program_data.boost_counter = 0;
+    program_data.update_interval = 10;
+    program_data.alpha = 0.01;
+    program_data.force_update = false;
 
     syslog.log(LOG_INFO, "Default setup finished");
 
@@ -222,6 +254,20 @@ void setup() {
 					pump_flow_ISR, FALLING);	
 	attachInterrupt(digitalPinToInterrupt(FILL_FLOW_PIN), 
 					fill_flow_ISR, FALLING);	
+	attachInterrupt(digitalPinToInterrupt(FLOW_SWITCH), 
+					flow_switch_ISR, CHANGE);	
+
+	// Do WIFI and MQTT Connection
+	wifi_connect();
+	Watchdog.reset(); // Pet the dog!
+	mqtt_connect(&mqtt_client, MQTT_NAME, NULL, NULL, mqtt_subscribe);
+	Watchdog.reset(); // Pet the dog!
+	mqtt_connect(&tb_mqtt_client, TB_MQTT_NAME, TB_MQTT_USERNAME, "", tb_mqtt_subscribe);
+	Watchdog.reset(); // Pet the dog!
+
+    // Upload attributes on load
+    DateTime now = rtc.now();
+    upload_attributes_start(&now);
 
 	// Set L low to show we are initialized.
 	digitalWrite(OUTPUT_LED_L, LOW);
@@ -231,24 +277,41 @@ void setup() {
 
 bool eeprom_write(void)
 {
-	uint32_t magic = EEPROM_MAGIC;
+	uint64_t magic = EEPROM_MAGIC;
 
-	eeprom.writeIfDiff(EEPROM_MAGIC_DATA, (uint8_t *)(&magic), sizeof(magic));
-	eeprom.writeIfDiff(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true, true);
+    // Add the version
+    uint64_t version = EEPROM_VERSION; 
+    magic |= (version << 32);
+
+    int rtn;
+	rtn = eeprom.writeIfDiff(EEPROM_MAGIC_DATA, (uint8_t *)(&magic), sizeof(magic));
+    if(rtn != EEPROM_I2C::NO_WRITE)
+    {
+        syslog.logf(LOG_INFO, "EEPROM magic does not match, written to EEPROM");
+    }
+	rtn = eeprom.writeIfDiff(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true, true);
+    if(rtn != EEPROM_I2C::NO_WRITE)
+    {
+        syslog.logf(LOG_INFO, "EEPROM data written, data does not match");
+    }
 
 	return true;
 }
 
 bool eeprom_read(void)
 {
-	uint32_t magic;
+	uint64_t magic;
+
 	if(eeprom.read(EEPROM_MAGIC_DATA, (uint8_t*)(&magic), sizeof(magic)))
 	{
 		syslog.log(LOG_ERR, "Unable to read MAGIC from EEPROM");
 		return false;
 	}
 
-	if(magic != EEPROM_MAGIC)
+	uint64_t _magic = EEPROM_MAGIC;
+    uint64_t _version = EEPROM_VERSION;
+    _magic |= (_version << 32);
+	if(magic != _magic)
 	{
 		syslog.log(LOG_ERR, "EPROM Magic does not match");
 		return false;
@@ -266,6 +329,7 @@ bool eeprom_read(void)
 
 void loop() {
 	DateTime now;
+    bool telemetry = false;
 
 	// Pet the dog!
 	Watchdog.reset();
@@ -274,18 +338,21 @@ void loop() {
     syslog.log(LOG_DEBUG, "wifi_connect()");
 	wifi_connect();
 	Watchdog.reset(); // Pet the dog!
-    syslog.log(LOG_DEBUG, "mqtt_connect() (TB)");
+    syslog.log(LOG_DEBUG, "mqtt_connect()");
+	mqtt_connect(&mqtt_client, MQTT_NAME, NULL, NULL, mqtt_subscribe);
+	Watchdog.reset(); // Pet the dog!
 	mqtt_connect(&tb_mqtt_client, TB_MQTT_NAME, TB_MQTT_USERNAME, "", tb_mqtt_subscribe);
 	Watchdog.reset(); // Pet the dog!
 
 	// Poll for over the air updates
-    syslog.log(LOG_DEBUG, "WiFiOTA.poll() (TB)");
+    syslog.log(LOG_DEBUG, "WiFiOTA.poll()");
 	WiFiOTA.poll();
 	Watchdog.reset(); // Pet the dog!
 
 	// Poll for MQTT updates
-    syslog.log(LOG_DEBUG, "mqtt_client.loop() (TB)");
+    syslog.log(LOG_DEBUG, "mqtt_client.loop()");
 	tb_mqtt_client.loop();
+	mqtt_client.loop();
 	Watchdog.reset(); // Pet the dog!
     
     // Sync NTP client
@@ -299,10 +366,17 @@ void loop() {
 	// Read the current time
     syslog.log(LOG_DEBUG, "Read RTC");
 	now = rtc.now();
+	sensor_readings.unix_time = now.unixtime();
 	Watchdog.reset(); // Pet the dog!
+    
+    // Each loop read sensors
+    read_sensors();
+    Watchdog.reset();  // Pet the dog!
 
 	if(now.hour() != last.hour())
 	{
+        print_readings(&sensor_readings, LOG_INFO);
+
 		// We have a new hour
 		if(((now.hour() % 6) == 0) && 
 			((program_data.current == PROGRAM_RUN) ||
@@ -314,15 +388,19 @@ void loop() {
 
 	if(program_data.prime)
 	{
-		set_pump_stop(1);
 		restart_pump = now;
 		prime_stop = 1;
 		program_data.prime = 0;
+		set_pump_stop(1);
 	}
 
 	// Every second call poll
-	if((now - last).totalseconds() >= 1) 
+	if(now.second() != last.second()) 
 	{
+        // Each second read slow sensors
+        read_slow_sensors(&sensor_readings);
+        Watchdog.reset();  // Pet the dog!
+
 		// Now check for running programs
         
         syslog.logf(LOG_DEBUG, "Program = %d", program_data.current);
@@ -338,7 +416,6 @@ void loop() {
 		{
 			// Check if time is up
 			int32_t delta = (program_data.boost_time - now).totalseconds();
-            syslog.logf("BOOST Delta = %ld", delta);
 			if(delta <= 0)
 			{
 				// We are done
@@ -355,7 +432,7 @@ void loop() {
 		
 		if(program_data.current == PROGRAM_DRAIN) {
 			// Running DRAIN Program
-			int32_t _wl = get_water_sensor_level();
+			float _wl = get_water_sensor_level();
 			if(_wl < program_data.level_target)
 			{
 				program_data.current = PROGRAM_HALT;
@@ -391,21 +468,22 @@ void loop() {
 			}
 			if(!get_pump_stop())
 			{
-				set_pump_stop(1);
+				set_pump_stop(true);
 			}
 		}
 
 		if((prime_stop == 1) && ((now - restart_pump).totalseconds() > 30))
 		{
 			prime_stop = 2;
-			set_pump_stop(0);
+			set_pump_stop(false);
 		}
 
 		if((prime_stop == 2) && ((now - restart_pump).totalseconds() > 270))
 		{
 			prime_stop = 0;
 			// store flow and pressure during prime. 
-            // TODO store values
+            syslog.logf(LOG_INFO, "Storing prime values");
+            upload_telemetry_prime(now.unixtime() - NTP_OFFSET);
 		}
 
         Watchdog.reset(); // Pet the dog!
@@ -418,123 +496,128 @@ void loop() {
         last = now;
     }
 
-    if((now - last_telemetry).totalseconds() >= 10)
+    if(((now - last_telemetry).totalseconds() >= program_data.update_interval) ||
+            program_data.force_update)
     {
         // Flash the L led
         digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-
-        // We have a new second
-        // Read pool sensors
-        read_sensors(&sensor_readings);
-        Watchdog.reset();  // Pet the dog!
-
+        
         // Publish with MQTT
-        tb_publish_readings(&tb_mqtt_client, &program_data, &sensor_readings, 
-                now.unixtime() - NTP_OFFSET);
+        upload_telemetry(now.unixtime() - NTP_OFFSET);
+        upload_attributes(&now);
         Watchdog.reset();  // Pet the dog!
-	}
+        
+        telemetry = true;
+        last_telemetry = now;
+        program_data.force_update = false;
+	} 
+
+    if(telemetry)
+    {
+        sensor_readings.loop_time_telemetry = millis() - loop_time_millis;
+    } else {
+        sensor_readings.loop_time = millis() - loop_time_millis;
+    }
+
+    loop_time_millis = millis();
 }
 
 void process_eps_pump()
 {
-	static uint32_t flow_time;
-	static bool flow_error = false;
-	bool error;
+    // Check if we recently started pump
+    unsigned long delta = millis() - program_data.pump_start_counter;
+    if(delta < EPS_PUMP_START_TIMEOUT)
+    {
+        syslog.logf(LOG_DEBUG, "EPS : Pump started %ld ms ago, ignoring EPS timeout is %ld", 
+                delta, EPS_PUMP_START_TIMEOUT);
+        return;
+    }
 
 	// Now check for fault conditions (pump running, no flow)
-	bool _flsw = get_flow_switch();
-	int _pump = get_pump_speed();
-	int _pump_stop = get_pump_stop();
+	uint8_t _pump = get_pump_speed();
+	bool _pump_stop = get_pump_stop();
 
-	error = ((_flsw == 0) && (_pump != 0) && (_pump_stop == 0));
+	bool error = (!flow_switch && _pump && !_pump_stop);
+    unsigned long switch_delta = millis() - flow_switch_millis;
 
-	if(error && !flow_error)
-	{
-		// First notice, set timeout
-		flow_time = millis();
-		flow_error = true;
-		syslog.log(LOG_ERR, "EPS : Flow error detected, timer started");
-	}
-
-	if(flow_error)
-	{
-		if((millis() - flow_time) > EPS_PUMP_FLOW_TIMEOUT)
-		{
-			if(error)
-			{
-				// We are in an error state
-				syslog.log(LOG_ERR, "EPS : Flow error"); 
-				set_pump_stop(1);
-				set_pump_speed(0);
-				program_data.current = PROGRAM_HALT;
-			} else {
-				// the error cleared. 
-				syslog.log(LOG_ERR, "EPS : Resetting flow error");
-				flow_error = false;
-			}
-		} else {
-            syslog.logf(LOG_DEBUG, "EPS : Countdown = %ld", 
-                     (EPS_PUMP_FLOW_TIMEOUT - (millis() - flow_time)));
-		}
-	}
+    if(error)
+    {
+        syslog.logf(LOG_ERR, "EPS : Pump flow error, delta = %ld ms, flow = %f gpm", 
+                switch_delta, sensor_readings.pump_flow);
+        if(switch_delta > EPS_PUMP_FLOW_TIMEOUT)
+        {
+            // We have a flow error
+            syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld ms)", switch_delta); 
+            set_pump_stop(1);
+            set_pump_speed(0);
+            program_data.current = PROGRAM_HALT;
+        }
+    }
 }
 
-void process_telemetry(uint32_t now)
+void read_slow_sensors(DataReadings *readings)
 {
-
+	readings->pump_flow = get_pump_flow();
+	readings->fill_flow = get_fill_flow();
 }
 
-void read_sensors(DataReadings *readings)
+float read_pt100_sensor(Adafruit_MAX31865 *sensor)
 {
-	uint8_t fault = max_ts.readFault();
+	uint8_t fault = sensor->readFault();
 	if(fault)
 	{
         syslog.logf(LOG_CRIT, "RTD Fault = %d", fault);
-		max_ts.clearFault();
-		readings->water_temp = 0.0;
+		sensor->clearFault();
+		return 0.0;
 	} else {
-		uint16_t rtd = max_ts.readRTD();
+		uint16_t rtd, ohmsx100;
 		uint32_t dummy;
-		
+
+		rtd = sensor->readRTD();
 		dummy = ((uint32_t)(rtd << 1)) * 100 * ((uint32_t) floor(MAX31865_RREF)) ;
 		dummy >>= 16 ;
+		ohmsx100 = (uint16_t)(dummy & 0xFFFF);
+        // ohms = (float)(ohmsx100 / 100) + ((float)(ohmsx100 % 100) / 100.0) ;
 
-		uint16_t ohmsx100 = (uint16_t)(dummy & 0xFFFF);
-		float water_temp = PT100.celsius(ohmsx100);
-		readings->water_temp = water_temp;
+		return PT100.celsius(ohmsx100);
 	}
+} 
 
-	readings->uv_index = uv.readUV();
-	readings->vis = uv.readVisible();
-	readings->ir = uv.readIR();
-	
-	readings->water_level = get_water_sensor_level();
-	readings->pump_pressure = get_pump_pressure();
-	readings->flow_switch = get_flow_switch();
-	readings->pump_speed = get_pump_speed();
-	readings->pump_flow = get_pump_flow();
-	readings->fill_flow = get_fill_flow();
+void read_sensors()
+{
 
-	if((readings->uv_index == 0) &&
-			(readings->vis == 0) && 
-			(readings->ir == 0))
-	{
-		readings->error_count++;
-        syslog.log(LOG_ALERT, "Resetting UV sensor");
-		uv.begin();
-		delay(100);
-		readings->uv_index = uv.readUV();
-		readings->vis = uv.readVisible();
-		readings->ir = uv.readIR();
-	}
+    sensor_readings.water_temp = read_pt100_sensor(&water_pt100);
+	sensor_readings.water_level = get_water_sensor_level();
+	sensor_readings.pump_pressure = get_pump_pressure();
+	sensor_readings.flow_switch = get_flow_switch();
+	sensor_readings.pump_speed = get_pump_speed();
+
+    sensor_readings.millis = millis();
+
+    // Now filter readings
+  
+    float alpha = program_data.alpha;
+    if(sensor_readings.valid) {
+        sensor_readings.water_level_s = (sensor_readings.water_level * alpha) + 
+            (sensor_readings.water_level_s * (1 - alpha));
+        sensor_readings.water_temp_s = (sensor_readings.water_temp * alpha) + 
+            (sensor_readings.water_temp_s * (1 - alpha));
+        sensor_readings.pump_pressure_s = (sensor_readings.pump_pressure * alpha) + 
+            (sensor_readings.pump_pressure_s * (1 - alpha));
+    } else {
+        sensor_readings.water_level_s = sensor_readings.water_level;
+        sensor_readings.water_temp_s = sensor_readings.water_temp;
+        sensor_readings.pump_pressure_s = sensor_readings.pump_pressure;
+        sensor_readings.valid = true;
+    }
 }
 
 bool get_flow_switch(void)
 {
-	return !digitalRead(FLOW_SWITCH);
+	return flow_switch;
 }
 
-int32_t get_fill_flow(void)
+float get_fill_flow(void)
 {
 	// Get current values
 	long int delta = millis() - fill_flow.last_read;
@@ -549,11 +632,10 @@ int32_t get_fill_flow(void)
 	_flow = _flow * FILL_FLOW_F_TO_Q;
 	_flow = _flow * LPM_TO_GPM;
 
-	int32_t _int_flow = (int32_t)(_flow * 1000);
-	return _int_flow;
+	return _flow;
 }	
 
-int32_t get_pump_flow(void)
+float get_pump_flow(void)
 {
 	// Get current values
 	long int delta = millis() - pump_flow.last_read;
@@ -568,92 +650,150 @@ int32_t get_pump_flow(void)
 	_flow = _flow * PUMP_FLOW_F_TO_Q;
 	_flow = _flow * LPM_TO_GPM;
 
-	int32_t _int_flow = (int32_t)(_flow * 1000);
-	return _int_flow;
+	return _flow;
 }	
 
-void tb_publish_readings(PubSubClient *client, ProgramData *data, DataReadings *readings, uint32_t now)
+void upload_attributes(DateTime *now)
 {
-    StaticJsonDocument<JSON_BUFFER_LEN> root;
+    StaticJsonDocument<JSON_BUFFER_LEN> attributes;
+    char _date[128];
 
-    JsonObject values = root.createNestedObject("values");
-    values["water_temp"] = readings->water_temp;
-    values["flow_switch"] = readings->flow_switch;
-    values["uv_index"] = (double)readings->uv_index / 100.0;
-    values["ir_light"] = readings->ir;
-    values["visible_light"] = readings->vis;
-    values["water_level"] = (double)readings->water_level / 100.0;
-    values["pump_pressure"] = (double)readings->pump_pressure / 100.0;
-    values["pump_flow"] = (double)readings->pump_flow / 1000.0;
-    values["pump_speed"] = pumpSpeeds[readings->pump_speed];
-    values["pump_speed_val"] = readings->pump_speed;
-    values["program"] = data->current;
+    make_datetime(_date, 128, now);
 
-    root["ts"] = String(now) + "000"; // This gets round the lack of uint64_t conversion
+    attributes["loop_time"] = sensor_readings.loop_time;
+    attributes["loop_time_telemetry"] = sensor_readings.loop_time_telemetry;
+    attributes["boost_counter"] = program_data.boost_counter;
+    attributes["unix_time"] = sensor_readings.unix_time;
+    attributes["pump_speed_val"] = sensor_readings.pump_speed;
+    attributes["datetime"] = _date;
 
     char buffer[JSON_BUFFER_LEN];
-    serializeJson(root, buffer, JSON_BUFFER_LEN);
 
+    serializeJson(attributes, buffer, JSON_BUFFER_LEN);
+
+    publish_readings(&tb_mqtt_client, TB_ATTRIBUTES_TOPIC, buffer);
+    publish_readings(&mqtt_client, ATTRIBUTES_TOPIC, buffer);
+}
+
+void upload_attributes_start(DateTime *now)
+{
+    StaticJsonDocument<JSON_BUFFER_LEN> attributes;
+    char _date[128];
+
+    make_datetime(_date, 128, now);
+
+    attributes["start_unix_time"] = now->unixtime();
+    attributes["start_datetime"] = _date;
+    attributes["version"] = VERSION;
+
+    char buffer[JSON_BUFFER_LEN];
+
+    serializeJson(attributes, buffer, JSON_BUFFER_LEN);
+
+    publish_readings(&tb_mqtt_client, TB_ATTRIBUTES_TOPIC, buffer);
+    publish_readings(&mqtt_client, ATTRIBUTES_TOPIC, buffer);
+}
+
+void upload_telemetry(uint32_t now)
+{
+    StaticJsonDocument<JSON_BUFFER_LEN> telemetry_root;
+    JsonObject telemetry_values = telemetry_root.createNestedObject("values");
+
+    telemetry_values["water_temp_s"] = sensor_readings.water_temp_s;
+    telemetry_values["water_level_s"] = sensor_readings.water_level_s;
+    telemetry_values["pump_pressure_s"] = sensor_readings.pump_pressure_s;
+    telemetry_values["flow_switch"] = sensor_readings.flow_switch;
+    telemetry_values["pump_flow"] = sensor_readings.pump_flow;
+    telemetry_values["pump_speed"] = pumpSpeeds[sensor_readings.pump_speed];
+    telemetry_values["program"] = program_data.current;
+
+    telemetry_root["ts"] = String(now) + "000"; // This gets round the lack of uint64_t conversion
+
+	Watchdog.reset();  // Pet the dog!
+
+    char buffer[JSON_BUFFER_LEN];
+
+    serializeJson(telemetry_root, buffer, JSON_BUFFER_LEN);
+
+    publish_readings(&tb_mqtt_client, TB_TELEMETRY_TOPIC, buffer);
+    publish_readings(&mqtt_client, TELEMETRY_TOPIC, buffer);
+}
+
+void upload_telemetry_prime(uint32_t now)
+{
+    StaticJsonDocument<JSON_BUFFER_LEN> telemetry_root;
+    JsonObject telemetry_values = telemetry_root.createNestedObject("values");
+
+    telemetry_values["prime_pump_pressure"] = sensor_readings.pump_pressure;
+    telemetry_values["prime_pump_flow"] = sensor_readings.pump_flow;
+
+    telemetry_root["ts"] = String(now) + "000"; // This gets round the lack of uint64_t conversion
+
+    char buffer[JSON_BUFFER_LEN];
+    serializeJson(telemetry_root, buffer, JSON_BUFFER_LEN);
+
+    publish_readings(&tb_mqtt_client, TB_TELEMETRY_TOPIC, buffer);
+    publish_readings(&mqtt_client, TELEMETRY_TOPIC, buffer);
+}
+
+
+void publish_readings(PubSubClient *client, const char *topic, const char *buffer)
+{
     if(client->connected())
     {
-        client->publish("v1/devices/me/telemetry", buffer, false);
-        //syslog.logf(LOG_INFO, "thingsboard upload = %s strlen = %d", buffer, strlen(buffer));
+        if(!client->publish(topic, buffer, true))
+        {
+            syslog.logf(LOG_ERR, "Error publishing to %s", client->getServer());
+        }
     } else {
-        syslog.log(LOG_ERR, "Unable to publish to thingsboard - not connected");
+        syslog.log(LOG_ERR, "Error publishing - not connected");
     }
 }
 
-void print_readings(DataReadings *readings)
+void print_readings(DataReadings *readings, uint16_t log_level)
 {
 
-    syslog.logf(LOG_DEBUG, "Water Temp             : %f degC", readings->water_temp);
-    syslog.logf(LOG_DEBUG, "Water Level            : %ld", readings->water_level);
+    syslog.logf(log_level, "Water Temp             : %f degC", readings->water_temp);
+    syslog.logf(log_level, "Water Level            : %f mm", readings->water_level);
+    syslog.logf(log_level, "Water Temp Smoothed    : %f degC", readings->water_temp_s);
+    syslog.logf(log_level, "Water Level Smoothed   : %f mm", readings->water_level_s);
     if(readings->flow_switch)
     {
-        syslog.log(LOG_DEBUG, "Flow Switch            : ON");
+        syslog.log(log_level, "Flow Switch            : ON");
     } else {
-        syslog.log(LOG_DEBUG, "Flow Switch            : OFF");
+        syslog.log(log_level, "Flow Switch            : OFF");
     }
 
-    syslog.logf(LOG_DEBUG, "UV Sensor              : %f %ld %ld", 
-            (float)readings->uv_index / 100,
-            readings->vis,
-            readings->ir);
-    syslog.logf(LOG_DEBUG, "Speed                  : %ld (%d)", readings->pump_speed,
+    syslog.logf(log_level, "Speed                  : %d (%d)", readings->pump_speed,
             pumpSpeeds[readings->pump_speed]);
-    syslog.logf(LOG_DEBUG, "Flow rate              : %f GPM", (float)readings->pump_flow / 1000);
+    syslog.logf(log_level, "Flow rate              : %f GPM", readings->pump_flow);
+    syslog.logf(log_level, "Loop time              : %ld", readings->loop_time);
+    syslog.logf(log_level, "Loop time (telemetry)  : %ld", readings->loop_time_telemetry);
 
 }
 
 void setup_sensors(void)
 {
-	// Setup SI1145
-	if(!uv.begin()) 
-	{
-        syslog.log(LOG_CRIT, "Unable to initialize SI1145 sensor");
-	}
-
 	// Setup MAX31865	
-	if(!max_ts.begin(MAX31865_3WIRE))
+	if(!water_pt100.begin(MAX31865_3WIRE))
 	{
         syslog.log(LOG_CRIT, "Unable to initialize MAX31865 sensor");
 	}
 }
 
-int32_t get_water_sensor_level(void)
+float get_water_sensor_level(void)
 {
-	int32_t val = analogRead(WATER_LEVEL_PIN);
+	float val = (float)analogRead(WATER_LEVEL_PIN);
 
 	val = (val * WATER_LEVEL_X) + WATER_LEVEL_C;
+    val /= 100;
 
 	return val;
 }
 
-int32_t get_pump_pressure(void)
+float get_pump_pressure(void)
 {
-	int32_t val;
-
-	val = analogRead(PUMP_PRESSURE_PIN);
+	int32_t val = analogRead(PUMP_PRESSURE_PIN);
 
 	// Now do conversion
 	float _val = 3300 * (float)val;
@@ -661,10 +801,9 @@ int32_t get_pump_pressure(void)
 
 	_val = _val - 335; // Zero point offset
 	_val = _val * 75;
+    _val = _val / 10000;
 
-	val = (int32_t)_val;
-
-	return val;
+	return _val;
 }
 
 void setup_clock(void)
@@ -718,7 +857,7 @@ void set_pump_speed(uint8_t speed)
 	}
 }
 
-int get_pump_speed(void)
+uint8_t get_pump_speed(void)
 {
 	int bits = 0;
 	bits |= digitalRead(PUMP_BIT_0);
@@ -730,6 +869,11 @@ int get_pump_speed(void)
 void set_pump_stop(bool stop)
 {
 	digitalWrite(PUMP_STOP_BIT, stop);
+    if(!stop)
+    {
+        // Start pump counter
+        program_data.pump_start_counter = millis();
+    }
 }
 
 bool get_pump_stop()
@@ -781,13 +925,6 @@ void wifi_connect() {
 	// Re-enable the watchdog
 	Watchdog.enable(WATCHDOG_TIME);
 
-    // Print info
-    Serial.print("IP Address = ");
-    Serial.println(WiFi.localIP());
-	
-	// start the WiFi OTA library
-	Serial.println("Setup OTA Programming.");
-	WiFiOTA.begin(OTA_NAME, OTA_PASSWORD, InternalStorage);
 }
 
 void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
@@ -797,8 +934,6 @@ void mqtt_connect(PubSubClient *client, const char* name, const char* uname,
 	{
 		return;
 	}
-
-	Watchdog.disable();
 
     syslog.log(LOG_INFO, "Attempting MQTT connection");
     bool c;
@@ -821,23 +956,33 @@ void mqtt_connect(PubSubClient *client, const char* name, const char* uname,
         syslog.logf(LOG_CRIT, "MQTT Connection failed to %s rc=%d",
                 name, client->state());
     }
-
-	// Re-enable the watchdog
-	Watchdog.enable(WATCHDOG_TIME);
 }
 
-void tb_mqtt_callback(char* topic, byte* payload, unsigned int length)
+void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
 {
 
-    if(!length)
+    Watchdog.reset(); // Reset here as this could stop the loop running?
+
+    if((!length) || (length > 254))
     {
         syslog.log(LOG_ERR, "Invalid tb_mqtt callback");
     }
 
-    char buffer[256];
-    strncpy(buffer, (char*)payload, length);
     payload[length] = 0;
-    syslog.logf(LOG_INFO, "TB MQTT Message arrived [%s] %s", topic, (char *)payload);
+
+    char *_req = strrchr(topic, '/');
+    if(!_req)
+    {
+        syslog.log(LOG_ERR, "Unable to parse request ID");
+        return;
+    }
+
+    int requestId = String(_req + 1).toInt();
+    syslog.logf(LOG_DEBUG, "MQTT Message arrived [%s] %s (requestId = %d)", topic, payload, requestId);
+
+    // Copy payload for later work
+    char _payload[256];
+    strncpy(_payload, (char*)payload, 256);
 
     StaticJsonDocument<JSON_BUFFER_LEN> json;
     DeserializationError error = deserializeJson(json, (char*)payload);
@@ -849,35 +994,80 @@ void tb_mqtt_callback(char* topic, byte* payload, unsigned int length)
     } 
 
     const char* method = json["method"];
+    syslog.logf(LOG_INFO, "Recieved RPC Request, Method = %s", method);
+
+    String _response_topic = String("v1/devices/me/rpc/response/") + requestId;
+    String _response_payload;
 
     if(!strcmp(method, "setPumpSpeed"))
     {
         int speed = json["params"];
         syslog.logf(LOG_INFO, "Setting pump speed to %d", speed);
         program_data.run_pump_speed = speed;
-    } else if(!strcmp(method, "setRunProgramValue")) {
+    } else if(!strcmp(method, "setRunProgram")) {
         int val = json["params"];
         if(val)
         {
             program_data.current = PROGRAM_RUN;
             syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
         }
-    } else if(!strcmp(method, "setHaltProgramValue")) {
+    } else if(!strcmp(method, "setHaltProgram")) {
         int val = json["params"];
         if(val)
         {
             program_data.current = PROGRAM_HALT;
             syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
         }
-    } else if(!strcmp(method, "setDrainProgramValue")) {
+    } else if(!strcmp(method, "setDrainProgram")) {
         int val = json["params"];
         if(val)
         {
             program_data.current = PROGRAM_DRAIN;
             syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
         }
+    } else if(!strcmp(method, "setBoostProgram")) {
+        int val = json["params"];
+        if(val)
+        {
+            program_data.boost_program = program_data.current;
+            program_data.current = PROGRAM_BOOST;
+            program_data.boost_time = rtc.now() + program_data.boost_duration;
+            syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
+        }
+    } else if(!strcmp(method, "setBoostTime")) {
+        float val = json["params"];
+        if(val)
+        {
+            program_data.boost_duration = val * 60 * 60; // Need seconds from hrs
+            syslog.logf(LOG_INFO, "Setting boost duration to %ld", program_data.boost_duration);
+        }
+    } else if(!strcmp(method, "getBoostTime")) {
+        // Return the boost time for widget
+        _response_payload = String(program_data.boost_duration / (60 * 60));
+    } else if(!strcmp(method, "getPumpSpeed")) {
+        // Return the boost time for widget
+        _response_payload = String(program_data.run_pump_speed);
+    } else if(!strcmp(method, "getTermInfo")) {
+        // Return the boost time for widget
+        StaticJsonDocument<JSON_BUFFER_LEN> response;
+        response["ok"] = true;
+        response["platform"] = "arduino M0";
+        response["type"] = "";
+        response["release"] = VERSION;
+        serializeJson(response, _response_payload);
+    } else if(!strcmp(method, "sendCommand")) {
+        char *command = json["params"]["command"];
+        syslog.logf(LOG_INFO, "Command = %s", command);
+        _response_payload = String("Hello World");
+    } else {
+        return;
     }
+    
+    // Echo back by publishing
 
+    //serializeJson(json_response, buffer, JSON_BUFFER_LEN);
+    tb_mqtt_client.publish(_response_topic.c_str(), _response_payload.c_str());
+    program_data.force_update = true;
 }
 
 void wifi_list_networks()
@@ -903,3 +1093,10 @@ void wifi_list_networks()
 	}
 }
 
+void make_datetime(char* buffer, size_t len, DateTime *now)
+{
+    snprintf(buffer, len, "Date is %02d/%02d/%02d (%s) %02d:%02d:%02d", 
+            now->year(), now->month(), now->day(), 
+            daysOfTheWeek[now->dayOfTheWeek()],
+            now->hour(), now->minute(), now->second());
+}

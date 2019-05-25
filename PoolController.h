@@ -1,21 +1,29 @@
-/*
- * =====================================================================================
- *
- *       Filename:  PoolController.h
- *
- *    Description:  
- *
- *        Version:  1.0
- *        Created:  06/17/2018 14:42:19
- *       Revision:  none
- *       Compiler:  gcc
- *
- *         Author:  Stuart B. Wilkins (sbw), stuwilkins@mac.com
- *   Organization:  
- *
- * =====================================================================================
- */
+// 
+// Copyright (c) 2018 Stuart B. WIlkins
+// 
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+// 
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+// 
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+//
 
+// VERSION INFO
+#ifndef VERSION
+#define VERSION unknown
+#endif
 
 // Buffer lengths
 #define JSON_BUFFER_LEN                     500
@@ -54,13 +62,15 @@
 #define PUMP_BIT_1        		              6
 #define PUMP_BIT_2        		              5
 
-#define EPS_PUMP_FLOW_TIMEOUT               30000L
+#define EPS_PUMP_FLOW_TIMEOUT               60000L
+#define EPS_PUMP_START_TIMEOUT              30000L
 
 #define WATCHDOG_TIME                       8000
 
 #define EEPROM_PROGRAM_DATA                 16
 #define EEPROM_MAGIC_DATA                   0
 #define EEPROM_MAGIC                        0xDEADF00D
+#define EEPROM_VERSION                      4                         
 
 #define MQTT_CLIENT_NAME                    "pool_controller"
 
@@ -72,7 +82,18 @@
 #define PROGRAM_PUMP_RUN_SPEED              3
 #define PROGRAM_PUMP_DRAIN_SPEED            7
 
-#define UPLOAD_WINDOW                       60000
+#define UPLOAD_WINDOW                       15000
+
+#define ALPHA                               0.01
+
+#define TB_TELEMETRY_TOPIC                  "v1/devices/me/telemetry"
+#define TELEMETRY_TOPIC                     "home/poolcontroller/telemetry"
+#define TB_ATTRIBUTES_TOPIC                 "v1/devices/me/attributes"
+#define ATTRIBUTES_TOPIC                    "home/poolcontroller/attributes"
+
+// Cl Dosing
+// 33.6 ml per minute
+
 
 // Programs to run
 enum programs {
@@ -105,38 +126,45 @@ static const char* const daysOfTheWeek[]  = {daysOfTheWeek_0,
 uint16_t pumpSpeeds[] = {0, 600, 1075, 1550, 2025, 2500, 2975, 3450};
 
 struct DataReadings {
-  float water_temp;
-  float air_temp;
-  float air_humidity;
-  int32_t water_level;
-  int32_t pump_pressure;
-  int32_t uv_index;
-  int32_t vis;
-  int32_t ir;
-  int32_t flow_switch;
-  int32_t pump_speed;
-  int32_t error_count;
-  int32_t pump_flow;
-  int32_t fill_flow;
+    float water_temp;
+    float water_temp_s;
+    float water_level;
+    float water_level_s;
+    float pump_pressure;
+    float pump_pressure_s;
+    bool flow_switch;
+    uint8_t pump_speed;
+    int32_t error_count;
+    float pump_flow;
+    float fill_flow;
+	unsigned long loop_time;
+	unsigned long loop_time_telemetry;
+    unsigned long millis;
+    unsigned long unix_time;
+    bool valid;
 };
 
 struct PumpFlowRate {
-		unsigned long last;
-		unsigned long last_read;
-		unsigned long clicks;
+    unsigned long last;
+    unsigned long last_read;
+    unsigned long clicks;
 };
 
 struct ProgramData {
-  int current;
-  int32_t level_target;
-  uint8_t run_pump_speed;
-  uint8_t drain_pump_speed;
-  uint8_t prime;
-  DateTime boost_time;
-  int32_t boost_duration;
-  int boost_program;
-  uint8_t boost_pump_speed;
-  int32_t boost_counter;
+    int current;
+    float level_target;
+    uint8_t run_pump_speed;
+    uint8_t drain_pump_speed;
+    uint8_t prime;
+    DateTime boost_time;
+    int32_t boost_duration;
+    int boost_program;
+    uint8_t boost_pump_speed;
+    int32_t boost_counter;
+    unsigned long pump_start_counter;
+    int update_interval;
+    float alpha;
+    bool force_update;
 };
 
 
@@ -148,28 +176,34 @@ bool eeprom_read(void);
 bool eeprom_write(void);
 void process_eps_pump();
 void process_telemetry(uint32_t now);
-void read_sensors(DataReadings *readings);
+void read_sensors();
+void read_slow_sensors(DataReadings *readings);
 bool get_flow_switch(void);
-int32_t get_fill_flow(void);
-int32_t get_pump_flow(void);
-void publish_readings(DataReadings *readings, uint32_t now);
-void print_readings(DataReadings *readings);
+float get_fill_flow(void);
+float get_pump_flow(void);
+void print_readings(DataReadings *readings, uint16_t log_level);
 void setup_sensors(void);
-int32_t get_water_sensor_level(void);
-int32_t get_pump_pressure(void);
+float get_water_sensor_level(void);
+float get_pump_pressure(void);
 void setup_clock(void);
 void set_clock(void);
 void set_pump_speed(uint8_t speed);
-int get_pump_speed(void);
+uint8_t get_pump_speed(void);
 void set_pump_stop(bool stop);
 bool get_pump_stop();
 void setup_wifi(void);
 void wifi_connect();
 void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
         const char* pass, const char* subscribe[]);
-void tb_mqtt_callback(char* topic, byte* payload, unsigned int length);
+void tb_rpc_callback(char* topic, byte* payload, unsigned int length);
 void write_state(void);
-void wifi_list_networks();
-void tb_publish_readings(PubSubClient *client, ProgramData *data, DataReadings *readings, uint32_t now);
+void wifi_list_networks(void);
+void publish_readings(PubSubClient *client, const char *topic, const char *buffer);
+void upload_telemetry(uint32_t now);
+void upload_telemetry_prime(uint32_t now);
+void upload_attributes(DateTime *now);
+void upload_attributes_start(DateTime *now);
+float read_pt100_sensor(Adafruit_MAX31865 *sensor);
+void make_datetime(char* buffer, size_t len, DateTime *now);
 
 
