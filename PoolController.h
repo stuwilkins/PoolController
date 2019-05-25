@@ -22,7 +22,7 @@
 
 // VERSION INFO
 #ifndef VERSION
-#define VERSION unknown
+#define VERSION                             "UNKNOWN"
 #endif
 
 // Buffer lengths
@@ -35,8 +35,10 @@
 #define MAX31865_RNOMINAL                   100.0
 
 #define WATER_LEVEL_PIN		                A0
-#define WATER_LEVEL_X     	                79.69
-#define WATER_LEVEL_C     	                -36455
+//#define WATER_LEVEL_X     	                79.69
+//#define WATER_LEVEL_C     	                -36455
+#define WATER_LEVEL_X     	                0.0124515
+#define WATER_LEVEL_C     	                -364.55
 
 #define PUMP_PRESSURE_PIN                   A1
 #define PUMP_PRESSURE_CONV                  13200
@@ -70,7 +72,7 @@
 #define EEPROM_PROGRAM_DATA                 16
 #define EEPROM_MAGIC_DATA                   0
 #define EEPROM_MAGIC                        0xDEADF00D
-#define EEPROM_VERSION                      4                         
+#define EEPROM_VERSION                      5                         
 
 #define MQTT_CLIENT_NAME                    "pool_controller"
 
@@ -84,7 +86,7 @@
 
 #define UPLOAD_WINDOW                       15000
 
-#define ALPHA                               0.01
+#define ALPHA                               0.025
 
 #define TB_TELEMETRY_TOPIC                  "v1/devices/me/telemetry"
 #define TELEMETRY_TOPIC                     "home/poolcontroller/telemetry"

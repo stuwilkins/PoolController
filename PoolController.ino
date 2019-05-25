@@ -138,6 +138,9 @@ void setup() {
 	pinMode(PUMP_FLOW_PIN, INPUT_PULLUP);
 	pinMode(FILL_FLOW_PIN, INPUT_PULLUP);
 
+    // Set to 16bit ADC resolution
+    analogReadResolution(16);
+
     set_pump_stop(1);
 
 	Serial.begin(115200, 0);
@@ -237,7 +240,7 @@ void setup() {
 	program_data.boost_duration = 60 * 60 * 8; // 30m
 	program_data.boost_counter = 0;
     program_data.update_interval = 10;
-    program_data.alpha = 0.01;
+    program_data.alpha = ALPHA;
     program_data.force_update = false;
 
     syslog.log(LOG_INFO, "Default setup finished");
@@ -786,24 +789,23 @@ float get_water_sensor_level(void)
 	float val = (float)analogRead(WATER_LEVEL_PIN);
 
 	val = (val * WATER_LEVEL_X) + WATER_LEVEL_C;
-    val /= 100;
 
 	return val;
 }
 
 float get_pump_pressure(void)
 {
-	int32_t val = analogRead(PUMP_PRESSURE_PIN);
+	float val = (float)analogRead(PUMP_PRESSURE_PIN);
 
 	// Now do conversion
-	float _val = 3300 * (float)val;
-	_val = 2 * _val / 1023;
+	val = 3300 * val;
+	val = 2 * val / 65535;
 
-	_val = _val - 335; // Zero point offset
-	_val = _val * 75;
-    _val = _val / 10000;
+	val = val - 335; // Zero point offset
+	val = val * 75;
+    val = val / 10000;
 
-	return _val;
+	return val;
 }
 
 void setup_clock(void)
