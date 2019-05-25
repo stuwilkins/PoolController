@@ -21,7 +21,7 @@
 # 
 #
 OTA_PASSWORD = $(shell cat ota.passwd)
-VERSION=\"$(shell git describe --tags --always --dirty 2> /dev/null)\"
+VERSION=\"$(shell git describe --tags --always --dirty --long 2> /dev/null)\"
 
 ARDUINO_DIR   = /Applications/Arduino.app/Contents/Java
 ARDUINO_PACKAGE_DIR = $(HOME)/Library/Arduino15/packages
