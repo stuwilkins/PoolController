@@ -34,6 +34,8 @@
 #include <Syslog.h>
 #include <ArduinoJson.h>
 #include <Adafruit_MCP23008.h>
+#include <filter.h>
+#include <network.h>
 
 #include "PoolController.h"
 #include "auth.h"
@@ -157,7 +159,7 @@ void setup() {
 	// Setup WIFI
 
 	setup_wifi();
-	wifi_connect();
+	wifi_connect(WIFI_SSID, WIFI_PASSWORD);
 
     // Now WiFi is up, connect to the syslog console
 	syslog_udp.begin(SYSLOG_PORT);
@@ -220,6 +222,9 @@ void setup() {
 
 	sensor_readings.error_count = 0;
 	sensor_readings.valid = false;
+    sensor_readings.water_temp_s.setAlpha(ALPHA);
+    sensor_readings.water_level_s.setAlpha(ALPHA);
+    sensor_readings.pump_pressure_s.setAlpha(ALPHA);
 
 	pump_flow.last = millis();
 	pump_flow.clicks = 0;
@@ -261,7 +266,7 @@ void setup() {
 					flow_switch_ISR, CHANGE);	
 
 	// Do WIFI and MQTT Connection
-	wifi_connect();
+	wifi_connect(WIFI_SSID, WIFI_PASSWORD);
 	Watchdog.reset(); // Pet the dog!
 	mqtt_connect(&mqtt_client, MQTT_NAME, NULL, NULL, mqtt_subscribe);
 	Watchdog.reset(); // Pet the dog!
@@ -339,7 +344,7 @@ void loop() {
 
 	// Do WIFI and MQTT Connection
     syslog.log(LOG_DEBUG, "wifi_connect()");
-	wifi_connect();
+	wifi_connect(WIFI_SSID, WIFI_PASSWORD);
 	Watchdog.reset(); // Pet the dog!
     syslog.log(LOG_DEBUG, "mqtt_connect()");
 	mqtt_connect(&mqtt_client, MQTT_NAME, NULL, NULL, mqtt_subscribe);
@@ -599,20 +604,9 @@ void read_sensors()
 
     // Now filter readings
   
-    float alpha = program_data.alpha;
-    if(sensor_readings.valid) {
-        sensor_readings.water_level_s = (sensor_readings.water_level * alpha) + 
-            (sensor_readings.water_level_s * (1 - alpha));
-        sensor_readings.water_temp_s = (sensor_readings.water_temp * alpha) + 
-            (sensor_readings.water_temp_s * (1 - alpha));
-        sensor_readings.pump_pressure_s = (sensor_readings.pump_pressure * alpha) + 
-            (sensor_readings.pump_pressure_s * (1 - alpha));
-    } else {
-        sensor_readings.water_level_s = sensor_readings.water_level;
-        sensor_readings.water_temp_s = sensor_readings.water_temp;
-        sensor_readings.pump_pressure_s = sensor_readings.pump_pressure;
-        sensor_readings.valid = true;
-    }
+    sensor_readings.water_level_s.newValue(sensor_readings.water_level);
+    sensor_readings.water_temp_s.newValue(sensor_readings.water_temp);
+    sensor_readings.pump_pressure_s.newValue(sensor_readings.pump_pressure);
 }
 
 bool get_flow_switch(void)
@@ -702,9 +696,9 @@ void upload_telemetry(uint32_t now)
     StaticJsonDocument<JSON_BUFFER_LEN> telemetry_root;
     JsonObject telemetry_values = telemetry_root.createNestedObject("values");
 
-    telemetry_values["water_temp_s"] = sensor_readings.water_temp_s;
-    telemetry_values["water_level_s"] = sensor_readings.water_level_s;
-    telemetry_values["pump_pressure_s"] = sensor_readings.pump_pressure_s;
+    telemetry_values["water_temp_s"] = sensor_readings.water_temp_s.getValue();
+    telemetry_values["water_level_s"] = sensor_readings.water_level_s.getValue();
+    telemetry_values["pump_pressure_s"] = sensor_readings.pump_pressure_s.getValue();
     telemetry_values["flow_switch"] = sensor_readings.flow_switch;
     telemetry_values["pump_flow"] = sensor_readings.pump_flow;
     telemetry_values["pump_speed"] = pumpSpeeds[sensor_readings.pump_speed];
@@ -758,8 +752,10 @@ void print_readings(DataReadings *readings, uint16_t log_level)
 
     syslog.logf(log_level, "Water Temp             : %f degC", readings->water_temp);
     syslog.logf(log_level, "Water Level            : %f mm", readings->water_level);
-    syslog.logf(log_level, "Water Temp Smoothed    : %f degC", readings->water_temp_s);
-    syslog.logf(log_level, "Water Level Smoothed   : %f mm", readings->water_level_s);
+    syslog.logf(log_level, "Pump Pressure          : %f PSI", readings->pump_pressure);
+    syslog.logf(log_level, "Water Temp Smoothed    : %f degC", readings->water_temp_s.getValue());
+    syslog.logf(log_level, "Water Level Smoothed   : %f mm", readings->water_level_s.getValue());
+    syslog.logf(log_level, "Pump Pressure Smoothed : %f PSI", readings->pump_pressure_s.getValue());
     if(readings->flow_switch)
     {
         syslog.log(log_level, "Flow Switch            : ON");
@@ -901,65 +897,6 @@ void setup_wifi(void)
 	Watchdog.reset();
 }
 
-void wifi_connect() {
-
-	if(WiFi.status() == WL_CONNECTED)
-	{
-		return;
-	}
-
-	Watchdog.disable();
-
-	int tries = 50;
-	while(WiFi.status() != WL_CONNECTED)
-	{
-		Serial.print("Attempting to connect to WPA SSID: ");
-		Serial.println(WIFI_SSID);
-		WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-		if(--tries == 0)
-		{
-			Serial.println("Enabling watchdog");
-			Watchdog.enable(WATCHDOG_TIME);
-		}
-		delay(5000);
-	}
-
-	// Re-enable the watchdog
-	Watchdog.enable(WATCHDOG_TIME);
-
-}
-
-void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
-        const char* pass, const char* subscribe[]) {
-
-	if(client->connected())
-	{
-		return;
-	}
-
-    syslog.log(LOG_INFO, "Attempting MQTT connection");
-    bool c;
-    if(uname != NULL)
-    {
-        c = client->connect(name, uname, pass);
-    } else {
-        c = client->connect(name);
-    }
-    if(c)
-    {
-        syslog.logf(LOG_INFO, "Connected to MQTT server name %s", name);
-        int i = 0;
-        while(subscribe[i] != 0)
-        {
-            client->subscribe(subscribe[i], 1);
-            i++;
-        }
-    } else {
-        syslog.logf(LOG_CRIT, "MQTT Connection failed to %s rc=%d",
-                name, client->state());
-    }
-}
-
 void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
 {
 
@@ -1070,29 +1007,6 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
     //serializeJson(json_response, buffer, JSON_BUFFER_LEN);
     tb_mqtt_client.publish(_response_topic.c_str(), _response_payload.c_str());
     program_data.force_update = true;
-}
-
-void wifi_list_networks()
-{
-	// scan for nearby networks:
-	Serial.println("** Scan Networks **");
-	byte numSsid = WiFi.scanNetworks();
-
-	// print the list of networks seen:
-	Serial.print("number of available networks:");
-	Serial.println(numSsid);
-
-	// print the network number and name for each network found:
-	for (int thisNet = 0; thisNet<numSsid; thisNet++) {
-		Serial.print(thisNet);
-		Serial.print(") ");
-		Serial.print(WiFi.SSID(thisNet));
-		Serial.print("\tSignal: ");
-		Serial.print(WiFi.RSSI(thisNet));
-		Serial.print(" dBm");
-		Serial.print("\tEncryption: ");
-		Serial.println(WiFi.encryptionType(thisNet));
-	}
 }
 
 void make_datetime(char* buffer, size_t len, DateTime *now)

@@ -20,6 +20,8 @@
 // SOFTWARE.
 //
 
+#include <filter.h>
+
 // VERSION INFO
 #ifndef VERSION
 #define VERSION                             "UNKNOWN"
@@ -127,13 +129,15 @@ static const char* const daysOfTheWeek[]  = {daysOfTheWeek_0,
 // Pump Speeds
 uint16_t pumpSpeeds[] = {0, 600, 1075, 1550, 2025, 2500, 2975, 3450};
 
+extern template class ExpFilter<float>;
+
 struct DataReadings {
     float water_temp;
-    float water_temp_s;
     float water_level;
-    float water_level_s;
     float pump_pressure;
-    float pump_pressure_s;
+    ExpFilter<float> water_temp_s;
+    ExpFilter<float> water_level_s;
+    ExpFilter<float> pump_pressure_s;
     bool flow_switch;
     uint8_t pump_speed;
     int32_t error_count;
@@ -194,12 +198,8 @@ uint8_t get_pump_speed(void);
 void set_pump_stop(bool stop);
 bool get_pump_stop();
 void setup_wifi(void);
-void wifi_connect();
-void mqtt_connect(PubSubClient *client, const char* name, const char* uname, 
-        const char* pass, const char* subscribe[]);
 void tb_rpc_callback(char* topic, byte* payload, unsigned int length);
 void write_state(void);
-void wifi_list_networks(void);
 void publish_readings(PubSubClient *client, const char *topic, const char *buffer);
 void upload_telemetry(uint32_t now);
 void upload_telemetry_prime(uint32_t now);

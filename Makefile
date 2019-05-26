@@ -19,7 +19,8 @@
 #  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 #  SOFTWARE.
 # 
-#
+
+
 OTA_PASSWORD = $(shell cat ota.passwd)
 VERSION=\"$(shell git describe --tags --always --dirty --long 2> /dev/null)\"
 
@@ -35,8 +36,7 @@ ARDUINO_OTA = $(ARDUINO_PACKAGE_DIR)/arduino/tools/arduinoOTA/1.2.1/
 
 ARDUINO_LIBS += Wire pt100rtd SPI Adafruit_MAX31865 \
 				uCRC16Lib RTClib WiFi101 WiFi101OTA \
-				SD Adafruit_SleepyDog \
-				Adafruit_HTU21DF_Library Adafruit_SI1145_Library \
+				SD Adafruit_SleepyDog stulib \
 				PubSubClient NTPClient Adafruit_ASFcore eeprom_i2c \
 				Syslog SerialFlash ArduinoJson Adafruit-MCP23008-library
 
