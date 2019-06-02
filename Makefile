@@ -38,7 +38,8 @@ ARDUINO_LIBS += Wire pt100rtd SPI Adafruit_MAX31865 \
 				uCRC16Lib RTClib WiFi101 WiFi101OTA \
 				SD Adafruit_SleepyDog stulib \
 				PubSubClient NTPClient Adafruit_ASFcore eeprom_i2c \
-				Syslog SerialFlash ArduinoJson Adafruit-MCP23008-library
+				Syslog SerialFlash ArduinoJson MCP23008 \
+				pushsafer-arduino-library
 
 
 include /usr/local/opt/arduino-mk/Sam.mk
@@ -57,7 +58,7 @@ test: all
 	screen $(DEVICE_PATH) $(MONITOR_BAUDRATE)
 
 upload-ota : all
-	$(ARDUINO_OTA)/bin/arduinoOTA -address pool-controller.lan -port 65280 \
+	$(ARDUINO_OTA)/bin/arduinoOTA -address 172.16.1.145 -port 65280 \
 	                              -username arduino -password $(OTA_PASSWORD) \
 								  -sketch build-adafruit_feather_m0/PoolController.bin \
 								  -upload /sketch -b -v

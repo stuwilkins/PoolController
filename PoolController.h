@@ -74,7 +74,7 @@
 #define EEPROM_PROGRAM_DATA                 16
 #define EEPROM_MAGIC_DATA                   0
 #define EEPROM_MAGIC                        0xDEADF00D
-#define EEPROM_VERSION                      5                         
+#define EEPROM_VERSION                      10
 
 #define MQTT_CLIENT_NAME                    "pool_controller"
 
@@ -83,8 +83,9 @@
 #define NTP_INTERVAL                        60 * 1000 // In miliseconds
 
 #define PROGRAM_LEVEL_TARGET                25500
-#define PROGRAM_PUMP_RUN_SPEED              3
+#define PROGRAM_PUMP_RUN_SPEED              4
 #define PROGRAM_PUMP_DRAIN_SPEED            7
+#define PROGRAM_PUMP_BOOST_SPEED            7
 
 #define UPLOAD_WINDOW                       15000
 
@@ -95,18 +96,31 @@
 #define TB_ATTRIBUTES_TOPIC                 "v1/devices/me/attributes"
 #define ATTRIBUTES_TOPIC                    "home/poolcontroller/attributes"
 
+#define PUSHSAFER_TITLE                     "PoolController"
+
+#define SYSLOG_PORT                         514
+
+#define AC_OUTPUT_0                         17
+#define AC_OUTPUT_1                         18
+
 // Cl Dosing
 // 33.6 ml per minute
 
 
 // Programs to run
 enum programs {
-  PROGRAM_HALT         = 0,
-  PROGRAM_RUN          = 1,
-  PROGRAM_TIMER        = 2,
-  PROGRAM_DRAIN        = 3,
-  PROGRAM_FILL         = 4,
-  PROGRAM_BOOST        = 5
+    PROGRAM_HALT         = 0,
+    PROGRAM_RUN          = 1,
+    PROGRAM_TIMER        = 2,
+    PROGRAM_DRAIN        = 3,
+    PROGRAM_FILL         = 4,
+    PROGRAM_BOOST        = 5
+};
+
+enum switch_programs {
+    SWITCH_PROGRAM_OFF   = 0,
+    SWITCH_PROGRAM_ON    = 1,
+    SWITCH_PROGRAM_RUN   = 2
 };
 
 // Days of the week
@@ -148,6 +162,8 @@ struct DataReadings {
     unsigned long millis;
     unsigned long unix_time;
     bool valid;
+    int cl_output;
+    int robot_output;
 };
 
 struct PumpFlowRate {
@@ -167,6 +183,16 @@ struct ProgramData {
     int boost_program;
     uint8_t boost_pump_speed;
     int32_t boost_counter;
+    DateTime cl_time;
+    int cl_program;
+    int32_t cl_duration;
+    int32_t cl_counter;
+    bool cl_output;
+    DateTime robot_time;
+    int robot_program;
+    int32_t robot_duration;
+    int32_t robot_counter;
+    bool robot_output;
     unsigned long pump_start_counter;
     int update_interval;
     float alpha;
@@ -207,5 +233,5 @@ void upload_attributes(DateTime *now);
 void upload_attributes_start(DateTime *now);
 float read_pt100_sensor(Adafruit_MAX31865 *sensor);
 void make_datetime(char* buffer, size_t len, DateTime *now);
-
+bool send_push_event(const char* message, const char* priority);
 

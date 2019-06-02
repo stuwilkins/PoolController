@@ -33,7 +33,8 @@
 #include <eeprom_i2c.h>
 #include <Syslog.h>
 #include <ArduinoJson.h>
-#include <Adafruit_MCP23008.h>
+#include <MCP23008.h>
+#include <pushsafer.h>
 #include <filter.h>
 #include <network.h>
 
@@ -71,6 +72,9 @@ PubSubClient tb_mqtt_client(tb_wifi_client);
 
 WiFiUDP syslog_udp;
 Syslog syslog(syslog_udp, SYSLOG_SERVER, SYSLOG_PORT, DEVICE_HOSTNAME, APP_NAME, LOG_KERN);
+
+WiFiClient pushsafer_client;
+Pushsafer pushsafer(PUSHSAFER_KEY, pushsafer_client);
 
 static const char* tb_mqtt_subscribe[]  = {"v1/devices/me/rpc/request/+", 0};
 static const char* mqtt_subscribe[]  = {"home/poolcontroller/request/+", 0};
@@ -139,11 +143,15 @@ void setup() {
 	pinMode(FLOW_SWITCH, INPUT_PULLUP);
 	pinMode(PUMP_FLOW_PIN, INPUT_PULLUP);
 	pinMode(FILL_FLOW_PIN, INPUT_PULLUP);
+	pinMode(AC_OUTPUT_0, OUTPUT);
+	pinMode(AC_OUTPUT_1, OUTPUT);
 
     // Set to 16bit ADC resolution
     analogReadResolution(16);
 
     set_pump_stop(1);
+    digitalWrite(AC_OUTPUT_0, 0);
+    digitalWrite(AC_OUTPUT_1, 0);
 
 	Serial.begin(115200, 0);
     unsigned long t = millis();
@@ -225,6 +233,8 @@ void setup() {
     sensor_readings.water_temp_s.setAlpha(ALPHA);
     sensor_readings.water_level_s.setAlpha(ALPHA);
     sensor_readings.pump_pressure_s.setAlpha(ALPHA);
+    sensor_readings.cl_output = 0;
+    sensor_readings.robot_output = 0;
 
 	pump_flow.last = millis();
 	pump_flow.clicks = 0;
@@ -240,13 +250,26 @@ void setup() {
 	program_data.run_pump_speed = PROGRAM_PUMP_RUN_SPEED;
 	program_data.drain_pump_speed = PROGRAM_PUMP_DRAIN_SPEED;
 	program_data.prime = 0;
-	program_data.boost_time = last;
-	program_data.boost_pump_speed = 7;
-	program_data.boost_duration = 60 * 60 * 8; // 30m
-	program_data.boost_counter = 0;
     program_data.update_interval = 10;
     program_data.alpha = ALPHA;
     program_data.force_update = false;
+
+	program_data.boost_time = last;
+	program_data.boost_pump_speed = PROGRAM_PUMP_BOOST_SPEED;
+	program_data.boost_duration = 60 * 60 * 8; // 30m
+	program_data.boost_counter = 0;
+
+    program_data.cl_program = SWITCH_PROGRAM_OFF;
+    program_data.cl_time = last;
+    program_data.cl_duration = 0.5 * 60 * 60;
+    program_data.cl_counter = 0;
+    program_data.cl_output = false;
+
+    program_data.robot_program = SWITCH_PROGRAM_OFF;
+    program_data.robot_time = last;
+    program_data.robot_duration = 2 * 60 * 60;
+    program_data.robot_counter = 0;
+    program_data.robot_output = false;
 
     syslog.log(LOG_INFO, "Default setup finished");
 
@@ -277,10 +300,13 @@ void setup() {
     DateTime now = rtc.now();
     upload_attributes_start(&now);
 
+    send_push_event("Controller started... setup() finished", "1");
+	Watchdog.reset(); // Pet the dog!
+    syslog.log(LOG_INFO, "End of setup()");
+
 	// Set L low to show we are initialized.
 	digitalWrite(OUTPUT_LED_L, LOW);
 
-    syslog.log(LOG_INFO, "End of setup()");
 }
 
 bool eeprom_write(void)
@@ -520,6 +546,62 @@ void loop() {
         program_data.force_update = false;
 	} 
 
+    // Check switch programs
+    if(program_data.robot_program == SWITCH_PROGRAM_ON)
+    {
+        // We turned on
+        program_data.robot_time = now + program_data.robot_duration;
+        program_data.robot_program = SWITCH_PROGRAM_RUN;
+        program_data.robot_output = true;
+        syslog.log(LOG_INFO, "Robot Program ON");
+        send_push_event("Robot Program ON", "1");
+    }
+
+    if(program_data.robot_program == SWITCH_PROGRAM_RUN)
+    {
+        // We are off and running
+        program_data.robot_counter = (program_data.robot_time - now).totalseconds();
+        if(program_data.robot_counter <= 0)
+        {
+            // we finished
+            program_data.robot_output = false;
+            program_data.robot_program = SWITCH_PROGRAM_OFF;
+            program_data.robot_counter = 0;
+            syslog.log(LOG_INFO, "Robot Program OFF");
+            send_push_event("Robot Program OFF", "1");
+        }
+    }
+    
+    // Check switch programs
+    if(program_data.cl_program == SWITCH_PROGRAM_ON)
+    {
+        // We turned on
+        program_data.cl_time = now + program_data.cl_duration;
+        program_data.cl_program = SWITCH_PROGRAM_RUN;
+        program_data.cl_output = true;
+        syslog.log(LOG_INFO, "Chlorine Program ON");
+        send_push_event("Chlorine Program ON", "1");
+    }
+
+    if(program_data.cl_program == SWITCH_PROGRAM_RUN)
+    {
+        // We are off and running
+        program_data.cl_counter = (program_data.cl_time - now).totalseconds();
+        if(program_data.cl_counter <= 0)
+        {
+            // we finished
+            program_data.cl_output = false;
+            program_data.cl_program = SWITCH_PROGRAM_OFF;
+            program_data.cl_counter = 0;
+            syslog.log(LOG_INFO, "Chlorine Program OFF");
+            send_push_event("Chlorine Program OFF", "1");
+        }
+    }
+
+    // Now set switches
+    digitalWrite(AC_OUTPUT_0, program_data.cl_output);
+    digitalWrite(AC_OUTPUT_1, program_data.robot_output);
+
     if(telemetry)
     {
         sensor_readings.loop_time_telemetry = millis() - loop_time_millis;
@@ -555,10 +637,21 @@ void process_eps_pump()
         if(switch_delta > EPS_PUMP_FLOW_TIMEOUT)
         {
             // We have a flow error
-            syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld ms)", switch_delta); 
             set_pump_stop(1);
             set_pump_speed(0);
             program_data.current = PROGRAM_HALT;
+
+            syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld ms)", switch_delta); 
+            send_push_event("EPS detected flow error. Pump turned off", "2");
+
+            if(program_data.cl_program)
+            {
+                // We need to turn off CL
+                program_data.cl_program = SWITCH_PROGRAM_OFF;
+                syslog.log(LOG_ERR, "EPS : Flow error - turning off Cl pump");
+                send_push_event("EPS detected flow error. Cl pump turned off", "2");
+            }
+
         }
     }
 }
@@ -601,6 +694,9 @@ void read_sensors()
 	sensor_readings.pump_speed = get_pump_speed();
 
     sensor_readings.millis = millis();
+
+    sensor_readings.cl_output = digitalRead(AC_OUTPUT_0);
+    sensor_readings.robot_output = digitalRead(AC_OUTPUT_1);
 
     // Now filter readings
   
@@ -660,6 +756,8 @@ void upload_attributes(DateTime *now)
     attributes["loop_time"] = sensor_readings.loop_time;
     attributes["loop_time_telemetry"] = sensor_readings.loop_time_telemetry;
     attributes["boost_counter"] = program_data.boost_counter;
+    attributes["cl_counter"] = program_data.cl_counter;
+    attributes["robot_counter"] = program_data.robot_counter;
     attributes["unix_time"] = sensor_readings.unix_time;
     attributes["pump_speed_val"] = sensor_readings.pump_speed;
     attributes["datetime"] = _date;
@@ -703,6 +801,8 @@ void upload_telemetry(uint32_t now)
     telemetry_values["pump_flow"] = sensor_readings.pump_flow;
     telemetry_values["pump_speed"] = pumpSpeeds[sensor_readings.pump_speed];
     telemetry_values["program"] = program_data.current;
+    telemetry_values["cl_output"] = sensor_readings.cl_output;
+    telemetry_values["robot_output"] = sensor_readings.robot_output;
 
     telemetry_root["ts"] = String(now) + "000"; // This gets round the lack of uint64_t conversion
 
@@ -827,6 +927,7 @@ void set_clock(void)
 	if(!ntp_client.forceUpdate())
     {
         syslog.logf(LOG_CRIT, "Unable to update time from NTP Server");
+        return;
     }
 	DateTime now = rtc.now();
 	unsigned long epoch_ntp = ntp_client.getEpochTime();
@@ -964,6 +1065,34 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
             program_data.current = PROGRAM_DRAIN;
             syslog.logf(LOG_INFO, "Setting program to %d", program_data.current);
         }
+    } else if(!strcmp(method, "setClProgram")) {
+        int val = json["params"];
+        if(val)
+        {
+            program_data.cl_program = SWITCH_PROGRAM_ON;
+            syslog.log(LOG_INFO, "Setting Cl program on");
+        }
+    } else if(!strcmp(method, "setClTime")) {
+        float val = json["params"];
+        if(val)
+        {
+            program_data.cl_duration = val * 60 * 60; // Need seconds from hrs
+            syslog.logf(LOG_INFO, "Setting Cl pump duration to %ld", program_data.cl_duration);
+        }
+    } else if(!strcmp(method, "setRobotProgram")) {
+        int val = json["params"];
+        if(val)
+        {
+            program_data.robot_program = SWITCH_PROGRAM_ON;
+            syslog.log(LOG_INFO, "Setting robot program on");
+        }
+    } else if(!strcmp(method, "setRobotTime")) {
+        float val = json["params"];
+        if(val)
+        {
+            program_data.robot_duration = val * 60 * 60; // Need seconds from hrs
+            syslog.logf(LOG_INFO, "Setting robot duration to %ld", program_data.robot_duration);
+        }
     } else if(!strcmp(method, "setBoostProgram")) {
         int val = json["params"];
         if(val)
@@ -983,6 +1112,12 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
     } else if(!strcmp(method, "getBoostTime")) {
         // Return the boost time for widget
         _response_payload = String(program_data.boost_duration / (60 * 60));
+    } else if(!strcmp(method, "getClTime")) {
+        // Return the boost time for widget
+        _response_payload = String(program_data.cl_duration / (60 * 60));
+    } else if(!strcmp(method, "getRobotTime")) {
+        // Return the boost time for widget
+        _response_payload = String(program_data.robot_duration / (60 * 60));
     } else if(!strcmp(method, "getPumpSpeed")) {
         // Return the boost time for widget
         _response_payload = String(program_data.run_pump_speed);
@@ -1015,4 +1150,31 @@ void make_datetime(char* buffer, size_t len, DateTime *now)
             now->year(), now->month(), now->day(), 
             daysOfTheWeek[now->dayOfTheWeek()],
             now->hour(), now->minute(), now->second());
+}
+
+bool send_push_event(const char* message, const char* priority)
+{
+    struct PushSaferInput input;
+    input.message = message;
+    input.title = PUSHSAFER_TITLE;
+    input.sound = "8";
+    input.vibration = "3";
+    input.icon = "2";
+    input.iconcolor = "#FF0000";
+    input.priority = priority;
+    input.device = "a";
+    input.url = "https://thingsboard.stuwilkins.org";
+    input.urlTitle = "Open ThingsBoard";
+    input.picture = "";
+    input.picture2 = "";
+    input.picture3 = "";
+    input.time2live = "";
+    input.retry = "";
+    input.expire = "";
+    input.answer = "";
+
+    pushsafer.sendEvent(input);
+    syslog.logf(LOG_INFO, "Pushed message \"%s\"", message);
+
+    return true;
 }
