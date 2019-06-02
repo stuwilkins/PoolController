@@ -35,8 +35,8 @@ ARDUINO_LIBS += Wire pt100rtd SPI Adafruit_MAX31865 \
 				uCRC16Lib RTClib WiFi101 WiFi101OTA \
 				SD Adafruit_SleepyDog stulib \
 				PubSubClient NTPClient Adafruit_ASFcore eeprom_i2c \
-				Syslog SerialFlash ArduinoJson MCP23008 \
-				pushsafer-arduino-library
+				Syslog SerialFlash ArduinoJson MCP23008 
+	
 
 
 include /usr/local/opt/arduino-mk/Sam.mk

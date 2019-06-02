@@ -97,8 +97,6 @@
 #define TB_ATTRIBUTES_TOPIC                 "v1/devices/me/attributes"
 #define ATTRIBUTES_TOPIC                    "home/poolcontroller/attributes"
 
-#define PUSHSAFER_TITLE                     "PoolController"
-
 #define SYSLOG_PORT                         514
 
 #define AC_OUTPUT_0                         17
@@ -263,6 +261,5 @@ void upload_attributes(DateTime *now);
 void upload_attributes_start(DateTime *now);
 float read_pt100_sensor(Adafruit_MAX31865 *sensor);
 void make_datetime(char* buffer, size_t len, DateTime *now);
-bool send_push_event(const char* message, const char* priority);
 void check_switch(Switch &prog, DateTime &now, const char* progname);
 

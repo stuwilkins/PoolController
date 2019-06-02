@@ -34,7 +34,6 @@
 #include <Syslog.h>
 #include <ArduinoJson.h>
 #include <MCP23008.h>
-#include <pushsafer.h>
 #include <filter.h>
 #include <network.h>
 
@@ -73,9 +72,6 @@ PubSubClient tb_mqtt_client(tb_wifi_client);
 WiFiUDP syslog_udp;
 Syslog syslog(syslog_udp, SYSLOG_SERVER, SYSLOG_PORT, DEVICE_HOSTNAME, APP_NAME, LOG_KERN);
 
-WiFiClient pushsafer_client;
-Pushsafer pushsafer(PUSHSAFER_KEY, pushsafer_client);
-
 static const char* tb_mqtt_subscribe[]  = {"v1/devices/me/rpc/request/+", 0};
 static const char* mqtt_subscribe[]  = {"home/poolcontroller/request/+", 0};
 
@@ -93,12 +89,16 @@ volatile PumpFlowRate pump_flow;
 volatile PumpFlowRate fill_flow;
 
 // Error handler which pauses and flashes the L led. 
-void error(const __FlashStringHelper *err) {
+void handle_error(const char *err)
+{
+    // Enable the watchdog (just to make sure)
+    // Then timeout, this causes a reset
+    Watchdog.enable(WATCHDOG_TIME);
 	Serial.println(err);
 	while(1)
 	{
 		digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-		delay(100);
+		delay(250);
 	}
 }
 
@@ -284,7 +284,6 @@ void setup() {
     DateTime now = rtc.now();
     upload_attributes_start(&now);
 
-    send_push_event("Controller started... setup() finished", "1");
 	Watchdog.reset(); // Pet the dog!
     syslog.log(LOG_INFO, "End of setup()");
 
@@ -611,7 +610,6 @@ void process_eps(DateTime now)
                     set_pump(true, 0);
                     program_data.current = PROGRAM_HALT;
                     syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld ms)", delta); 
-                    send_push_event("EPS detected flow error. Pump turned off", "2");
                 }
 
                 // Check for Cl Pump
@@ -619,7 +617,6 @@ void process_eps(DateTime now)
                 {
                     program_data.cl_pump.program = SWITCH_PROGRAM_ABORT;
                     syslog.log(LOG_ERR, "EPS : Flow error - turning off Cl pump");
-                    send_push_event("EPS detected flow error. Cl pump turned off", "2");
                 }
             }
 
@@ -965,7 +962,7 @@ void setup_wifi(void)
 
 	WiFi.setPins(8,7,4,2);
 	if (WiFi.status() == WL_NO_SHIELD) {
-		error(F("WiFi module not present"));
+		handle_error("WiFi module not present");
 	}
 
 	Watchdog.reset();
@@ -1096,6 +1093,12 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
             program_data.boost.duration = val * 60 * 60; // Need seconds from hrs
             syslog.logf(LOG_INFO, "Setting boost duration to %ld", program_data.boost.duration);
         }
+    } else if(!strcmp(method, "RESET")) {
+        int val = json["params"];
+        if(val) 
+        {
+            handle_error("Reset requested ....");
+        }
     } else if(!strcmp(method, "getBoostTime")) {
         // Return the boost time for widget
         _response_payload = String((float)program_data.boost.duration / (60 * 60));
@@ -1118,8 +1121,8 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
         serializeJson(response, _response_payload);
     } else if(!strcmp(method, "sendCommand")) {
         char *command = json["params"]["command"];
-        syslog.logf(LOG_INFO, "Command = %s", command);
-        _response_payload = String("Hello World");
+        syslog.logf(LOG_INFO, "Console command = %s", command);
+        _response_payload = String("");
     } else {
         return;
     }
@@ -1138,31 +1141,4 @@ void make_datetime(char* buffer, size_t len, DateTime *now)
             now->year(), now->month(), now->day(), 
             daysOfTheWeek[now->dayOfTheWeek()],
             now->hour(), now->minute(), now->second());
-}
-
-bool send_push_event(const char* message, const char* priority)
-{
-    struct PushSaferInput input;
-    input.message = message;
-    input.title = PUSHSAFER_TITLE;
-    input.sound = "8";
-    input.vibration = "3";
-    input.icon = "2";
-    input.iconcolor = "#FF0000";
-    input.priority = priority;
-    input.device = "a";
-    input.url = "https://thingsboard.stuwilkins.org";
-    input.urlTitle = "Open ThingsBoard";
-    input.picture = "";
-    input.picture2 = "";
-    input.picture3 = "";
-    input.time2live = "";
-    input.retry = "";
-    input.expire = "";
-    input.answer = "";
-
-    //pushsafer.sendEvent(input);
-    syslog.logf(LOG_INFO, "Pushed message \"%s\"", message);
-
-    return true;
 }
