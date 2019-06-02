@@ -326,7 +326,7 @@ bool eeprom_write(void)
 	rtn = eeprom.writeIfDiff(EEPROM_PROGRAM_DATA, (uint8_t *)(&program_data), sizeof(program_data), true, true);
     if(rtn != EEPROM_I2C::NO_WRITE)
     {
-        syslog.logf(LOG_INFO, "EEPROM data written, data does not match");
+        syslog.logf(LOG_DEBUG, "EEPROM data written, data does not match");
     }
 
 	return true;
@@ -557,6 +557,15 @@ void loop() {
         send_push_event("Robot Program ON", "1");
     }
 
+    if(program_data.robot_program == SWITCH_PROGRAM_ABORT)
+    {
+        program_data.robot_output = false;
+        program_data.robot_program = SWITCH_PROGRAM_OFF;
+        program_data.robot_counter = 0;
+        syslog.log(LOG_INFO, "Robot Program Aborted");
+        send_push_event("Robot Program Aborted", "1");
+    }
+
     if(program_data.robot_program == SWITCH_PROGRAM_RUN)
     {
         // We are off and running
@@ -581,6 +590,15 @@ void loop() {
         program_data.cl_output = true;
         syslog.log(LOG_INFO, "Chlorine Program ON");
         send_push_event("Chlorine Program ON", "1");
+    }
+
+    if(program_data.cl_program == SWITCH_PROGRAM_ABORT)
+    {
+        program_data.cl_output = false;
+        program_data.cl_program = SWITCH_PROGRAM_OFF;
+        program_data.cl_counter = 0;
+        syslog.log(LOG_INFO, "Cl Pump Program Aborted");
+        send_push_event("Cl Pump Program Aborted", "1");
     }
 
     if(program_data.cl_program == SWITCH_PROGRAM_RUN)
@@ -1071,6 +1089,9 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
         {
             program_data.cl_program = SWITCH_PROGRAM_ON;
             syslog.log(LOG_INFO, "Setting Cl program on");
+        } else {
+            program_data.cl_program = SWITCH_PROGRAM_ABORT;
+            syslog.log(LOG_INFO, "Setting Cl program off");
         }
     } else if(!strcmp(method, "setClTime")) {
         float val = json["params"];
@@ -1085,6 +1106,9 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
         {
             program_data.robot_program = SWITCH_PROGRAM_ON;
             syslog.log(LOG_INFO, "Setting robot program on");
+        } else {
+            program_data.robot_program = SWITCH_PROGRAM_ABORT;
+            syslog.log(LOG_INFO, "Setting robot program off");
         }
     } else if(!strcmp(method, "setRobotTime")) {
         float val = json["params"];
@@ -1173,7 +1197,7 @@ bool send_push_event(const char* message, const char* priority)
     input.expire = "";
     input.answer = "";
 
-    pushsafer.sendEvent(input);
+    //pushsafer.sendEvent(input);
     syslog.logf(LOG_INFO, "Pushed message \"%s\"", message);
 
     return true;

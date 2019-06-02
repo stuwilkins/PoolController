@@ -120,7 +120,8 @@ enum programs {
 enum switch_programs {
     SWITCH_PROGRAM_OFF   = 0,
     SWITCH_PROGRAM_ON    = 1,
-    SWITCH_PROGRAM_RUN   = 2
+    SWITCH_PROGRAM_RUN   = 2,
+    SWITCH_PROGRAM_ABORT = 3
 };
 
 // Days of the week
