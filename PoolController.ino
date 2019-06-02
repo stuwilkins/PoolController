@@ -154,10 +154,6 @@ void setup() {
     digitalWrite(AC_OUTPUT_1, 0);
 
 	Serial.begin(115200, 0);
-    unsigned long t = millis();
-    while(((millis() - t) < 10000) && !Serial){
-        delay(1000);
-    }
         
 	// Set the L led hight to show we are configuring
 	digitalWrite(OUTPUT_LED_L, HIGH);
@@ -259,17 +255,17 @@ void setup() {
 	program_data.boost_duration = 60 * 60 * 8; // 30m
 	program_data.boost_counter = 0;
 
-    program_data.cl_program = SWITCH_PROGRAM_OFF;
-    program_data.cl_time = last;
-    program_data.cl_duration = 0.5 * 60 * 60;
-    program_data.cl_counter = 0;
-    program_data.cl_output = false;
+    program_data.cl_pump.program = SWITCH_PROGRAM_OFF;
+    program_data.cl_pump.time = last;
+    program_data.cl_pump.duration = 0.5 * 60 * 60;
+    program_data.cl_pump.counter = 0;
+    program_data.cl_pump.output = false;
 
-    program_data.robot_program = SWITCH_PROGRAM_OFF;
-    program_data.robot_time = last;
-    program_data.robot_duration = 2 * 60 * 60;
-    program_data.robot_counter = 0;
-    program_data.robot_output = false;
+    program_data.robot.program = SWITCH_PROGRAM_OFF;
+    program_data.robot.time = last;
+    program_data.robot.duration = 2 * 60 * 60;
+    program_data.robot.counter = 0;
+    program_data.robot.output = false;
 
     syslog.log(LOG_INFO, "Default setup finished");
 
@@ -435,6 +431,12 @@ void loop() {
         read_slow_sensors(&sensor_readings);
         Watchdog.reset();  // Pet the dog!
 
+        // Now check for EPS for Cl Pump
+        if(program_data.cl_pump.program != SWITCH_PROGRAM_OFF)
+        {
+            process_eps_cl_pump();
+        }
+
 		// Now check for running programs
         
         syslog.logf(LOG_DEBUG, "Program = %d", program_data.current);
@@ -547,78 +549,78 @@ void loop() {
 	} 
 
     // Check switch programs
-    if(program_data.robot_program == SWITCH_PROGRAM_ON)
+    if(program_data.robot.program == SWITCH_PROGRAM_ON)
     {
         // We turned on
-        program_data.robot_time = now + program_data.robot_duration;
-        program_data.robot_program = SWITCH_PROGRAM_RUN;
-        program_data.robot_output = true;
+        program_data.robot.time = now + program_data.robot.duration;
+        program_data.robot.program = SWITCH_PROGRAM_RUN;
+        program_data.robot.output = true;
         syslog.log(LOG_INFO, "Robot Program ON");
         send_push_event("Robot Program ON", "1");
     }
 
-    if(program_data.robot_program == SWITCH_PROGRAM_ABORT)
+    if(program_data.robot.program == SWITCH_PROGRAM_ABORT)
     {
-        program_data.robot_output = false;
-        program_data.robot_program = SWITCH_PROGRAM_OFF;
-        program_data.robot_counter = 0;
+        program_data.robot.output = false;
+        program_data.robot.program = SWITCH_PROGRAM_OFF;
+        program_data.robot.counter = 0;
         syslog.log(LOG_INFO, "Robot Program Aborted");
         send_push_event("Robot Program Aborted", "1");
     }
 
-    if(program_data.robot_program == SWITCH_PROGRAM_RUN)
+    if(program_data.robot.program == SWITCH_PROGRAM_RUN)
     {
         // We are off and running
-        program_data.robot_counter = (program_data.robot_time - now).totalseconds();
-        if(program_data.robot_counter <= 0)
+        program_data.robot.counter = (program_data.robot.time - now).totalseconds();
+        if(program_data.robot.counter <= 0)
         {
             // we finished
-            program_data.robot_output = false;
-            program_data.robot_program = SWITCH_PROGRAM_OFF;
-            program_data.robot_counter = 0;
+            program_data.robot.output = false;
+            program_data.robot.program = SWITCH_PROGRAM_OFF;
+            program_data.robot.counter = 0;
             syslog.log(LOG_INFO, "Robot Program OFF");
             send_push_event("Robot Program OFF", "1");
         }
     }
     
     // Check switch programs
-    if(program_data.cl_program == SWITCH_PROGRAM_ON)
+    if(program_data.cl_pump.program == SWITCH_PROGRAM_ON)
     {
         // We turned on
-        program_data.cl_time = now + program_data.cl_duration;
-        program_data.cl_program = SWITCH_PROGRAM_RUN;
-        program_data.cl_output = true;
+        program_data.cl_pump.time = now + program_data.cl_pump.duration;
+        program_data.cl_pump.program = SWITCH_PROGRAM_RUN;
+        program_data.cl_pump.output = true;
         syslog.log(LOG_INFO, "Chlorine Program ON");
         send_push_event("Chlorine Program ON", "1");
     }
 
-    if(program_data.cl_program == SWITCH_PROGRAM_ABORT)
+    if(program_data.cl_pump.program == SWITCH_PROGRAM_ABORT)
     {
-        program_data.cl_output = false;
-        program_data.cl_program = SWITCH_PROGRAM_OFF;
-        program_data.cl_counter = 0;
+        program_data.cl_pump.output = false;
+        program_data.cl_pump.program = SWITCH_PROGRAM_OFF;
+        program_data.cl_pump.counter = 0;
         syslog.log(LOG_INFO, "Cl Pump Program Aborted");
         send_push_event("Cl Pump Program Aborted", "1");
     }
 
-    if(program_data.cl_program == SWITCH_PROGRAM_RUN)
+    if(program_data.cl_pump.program == SWITCH_PROGRAM_RUN)
     {
         // We are off and running
-        program_data.cl_counter = (program_data.cl_time - now).totalseconds();
-        if(program_data.cl_counter <= 0)
+        program_data.cl_pump.counter = (program_data.cl_pump.time - now).totalseconds();
+        if(program_data.cl_pump.counter <= 0)
         {
             // we finished
-            program_data.cl_output = false;
-            program_data.cl_program = SWITCH_PROGRAM_OFF;
-            program_data.cl_counter = 0;
+            program_data.cl_pump.output = false;
+            program_data.cl_pump.program = SWITCH_PROGRAM_OFF;
+            program_data.cl_pump.counter = 0;
             syslog.log(LOG_INFO, "Chlorine Program OFF");
             send_push_event("Chlorine Program OFF", "1");
         }
     }
 
     // Now set switches
-    digitalWrite(AC_OUTPUT_0, program_data.cl_output);
-    digitalWrite(AC_OUTPUT_1, program_data.robot_output);
+    digitalWrite(AC_OUTPUT_0, program_data.cl_pump.output);
+    digitalWrite(AC_OUTPUT_1, program_data.robot.output);
 
     if(telemetry)
     {
@@ -630,8 +632,31 @@ void loop() {
     loop_time_millis = millis();
 }
 
+void process_eps_cl_pump()
+{
+    syslog.log(LOG_DEBUG, "process_eps_cl_pump()");
+
+	bool error = !flow_switch;
+    unsigned long switch_delta = millis() - flow_switch_millis;
+
+    if(error)
+    {
+        syslog.logf(LOG_ERR, "EPS : Pump flow error (Cl Pump), delta = %ld ms, flow = %f gpm", 
+                switch_delta, sensor_readings.pump_flow);
+        if(switch_delta > EPS_PUMP_FLOW_TIMEOUT_CL)
+        {
+            // We need to turn off CL
+            program_data.cl_pump.program = SWITCH_PROGRAM_OFF;
+            syslog.log(LOG_ERR, "EPS : Flow error - turning off Cl pump");
+            send_push_event("EPS detected flow error. Cl pump turned off", "2");
+        }
+    }
+}
+
 void process_eps_pump()
 {
+    syslog.log(LOG_DEBUG, "process_eps_pump()");
+
     // Check if we recently started pump
     unsigned long delta = millis() - program_data.pump_start_counter;
     if(delta < EPS_PUMP_START_TIMEOUT)
@@ -650,7 +675,7 @@ void process_eps_pump()
 
     if(error)
     {
-        syslog.logf(LOG_ERR, "EPS : Pump flow error, delta = %ld ms, flow = %f gpm", 
+        syslog.logf(LOG_ERR, "EPS : Pump flow error (Main Program), delta = %ld ms, flow = %f gpm", 
                 switch_delta, sensor_readings.pump_flow);
         if(switch_delta > EPS_PUMP_FLOW_TIMEOUT)
         {
@@ -662,10 +687,10 @@ void process_eps_pump()
             syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld ms)", switch_delta); 
             send_push_event("EPS detected flow error. Pump turned off", "2");
 
-            if(program_data.cl_program)
+            if(program_data.cl_pump.program)
             {
                 // We need to turn off CL
-                program_data.cl_program = SWITCH_PROGRAM_OFF;
+                program_data.cl_pump.program = SWITCH_PROGRAM_OFF;
                 syslog.log(LOG_ERR, "EPS : Flow error - turning off Cl pump");
                 send_push_event("EPS detected flow error. Cl pump turned off", "2");
             }
@@ -774,8 +799,8 @@ void upload_attributes(DateTime *now)
     attributes["loop_time"] = sensor_readings.loop_time;
     attributes["loop_time_telemetry"] = sensor_readings.loop_time_telemetry;
     attributes["boost_counter"] = program_data.boost_counter;
-    attributes["cl_counter"] = program_data.cl_counter;
-    attributes["robot_counter"] = program_data.robot_counter;
+    attributes["cl_counter"] = program_data.cl_pump.counter;
+    attributes["robot_counter"] = program_data.robot.counter;
     attributes["unix_time"] = sensor_readings.unix_time;
     attributes["pump_speed_val"] = sensor_readings.pump_speed;
     attributes["datetime"] = _date;
@@ -1087,35 +1112,35 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
         int val = json["params"];
         if(val)
         {
-            program_data.cl_program = SWITCH_PROGRAM_ON;
+            program_data.cl_pump.program = SWITCH_PROGRAM_ON;
             syslog.log(LOG_INFO, "Setting Cl program on");
         } else {
-            program_data.cl_program = SWITCH_PROGRAM_ABORT;
+            program_data.cl_pump.program = SWITCH_PROGRAM_ABORT;
             syslog.log(LOG_INFO, "Setting Cl program off");
         }
     } else if(!strcmp(method, "setClTime")) {
         float val = json["params"];
         if(val)
         {
-            program_data.cl_duration = val * 60 * 60; // Need seconds from hrs
-            syslog.logf(LOG_INFO, "Setting Cl pump duration to %ld", program_data.cl_duration);
+            program_data.cl_pump.duration = val * 60 * 60; // Need seconds from hrs
+            syslog.logf(LOG_INFO, "Setting Cl pump duration to %ld", program_data.cl_pump.duration);
         }
     } else if(!strcmp(method, "setRobotProgram")) {
         int val = json["params"];
         if(val)
         {
-            program_data.robot_program = SWITCH_PROGRAM_ON;
+            program_data.robot.program = SWITCH_PROGRAM_ON;
             syslog.log(LOG_INFO, "Setting robot program on");
         } else {
-            program_data.robot_program = SWITCH_PROGRAM_ABORT;
+            program_data.robot.program = SWITCH_PROGRAM_ABORT;
             syslog.log(LOG_INFO, "Setting robot program off");
         }
     } else if(!strcmp(method, "setRobotTime")) {
         float val = json["params"];
         if(val)
         {
-            program_data.robot_duration = val * 60 * 60; // Need seconds from hrs
-            syslog.logf(LOG_INFO, "Setting robot duration to %ld", program_data.robot_duration);
+            program_data.robot.duration = val * 60 * 60; // Need seconds from hrs
+            syslog.logf(LOG_INFO, "Setting robot duration to %ld", program_data.robot.duration);
         }
     } else if(!strcmp(method, "setBoostProgram")) {
         int val = json["params"];
@@ -1138,10 +1163,10 @@ void tb_rpc_callback(char* topic, byte* payload, unsigned int length)
         _response_payload = String(program_data.boost_duration / (60 * 60));
     } else if(!strcmp(method, "getClTime")) {
         // Return the boost time for widget
-        _response_payload = String(program_data.cl_duration / (60 * 60));
+        _response_payload = String(program_data.cl_pump.duration / (60 * 60));
     } else if(!strcmp(method, "getRobotTime")) {
         // Return the boost time for widget
-        _response_payload = String(program_data.robot_duration / (60 * 60));
+        _response_payload = String(program_data.robot.duration / (60 * 60));
     } else if(!strcmp(method, "getPumpSpeed")) {
         // Return the boost time for widget
         _response_payload = String(program_data.run_pump_speed);

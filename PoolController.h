@@ -67,6 +67,7 @@
 #define PUMP_BIT_2        		              5
 
 #define EPS_PUMP_FLOW_TIMEOUT               60000L
+#define EPS_PUMP_FLOW_TIMEOUT_CL            20000L
 #define EPS_PUMP_START_TIMEOUT              30000L
 
 #define WATCHDOG_TIME                       8000
@@ -74,7 +75,7 @@
 #define EEPROM_PROGRAM_DATA                 16
 #define EEPROM_MAGIC_DATA                   0
 #define EEPROM_MAGIC                        0xDEADF00D
-#define EEPROM_VERSION                      10
+#define EEPROM_VERSION                      12
 
 #define MQTT_CLIENT_NAME                    "pool_controller"
 
@@ -173,6 +174,14 @@ struct PumpFlowRate {
     unsigned long clicks;
 };
 
+struct Switch {
+    DateTime time;
+    int program;
+    int32_t duration;
+    int32_t counter;
+    bool output;
+};
+
 struct ProgramData {
     int current;
     float level_target;
@@ -184,16 +193,9 @@ struct ProgramData {
     int boost_program;
     uint8_t boost_pump_speed;
     int32_t boost_counter;
-    DateTime cl_time;
-    int cl_program;
-    int32_t cl_duration;
-    int32_t cl_counter;
-    bool cl_output;
-    DateTime robot_time;
-    int robot_program;
-    int32_t robot_duration;
-    int32_t robot_counter;
-    bool robot_output;
+    struct Switch boost;
+    struct Switch cl_pump;
+    struct Switch robot;
     unsigned long pump_start_counter;
     int update_interval;
     float alpha;
@@ -207,6 +209,7 @@ void pump_flow_ISR();
 void fill_flow_ISR();
 bool eeprom_read(void);
 bool eeprom_write(void);
+void process_eps_cl_pump();
 void process_eps_pump();
 void process_telemetry(uint32_t now);
 void read_sensors();
