@@ -646,7 +646,7 @@ void process_eps_cl_pump()
         if(switch_delta > EPS_PUMP_FLOW_TIMEOUT_CL)
         {
             // We need to turn off CL
-            program_data.cl_pump.program = SWITCH_PROGRAM_OFF;
+            program_data.cl_pump.program = SWITCH_PROGRAM_ABORT;
             syslog.log(LOG_ERR, "EPS : Flow error - turning off Cl pump");
             send_push_event("EPS detected flow error. Cl pump turned off", "2");
         }
