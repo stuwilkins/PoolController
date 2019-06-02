@@ -250,7 +250,7 @@ float get_pump_pressure(void);
 void setup_clock(void);
 void set_clock(void);
 bool set_pump(bool stop, uint8_t speed);
-void get_pump(bool *stop, uint8_t *speed);
+void get_pump(bool &stop, uint8_t &speed);
 void setup_wifi(void);
 void tb_rpc_callback(char* topic, byte* payload, unsigned int length);
 void write_state(void);

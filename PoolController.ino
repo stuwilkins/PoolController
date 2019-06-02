@@ -662,7 +662,7 @@ void read_sensors()
 
     uint8_t speed;
     bool stop;
-    get_pump(&stop, &speed);
+    get_pump(stop, speed);
 	sensor_readings.pump_speed = speed;
 	sensor_readings.pump_stop = stop;
 
@@ -923,7 +923,7 @@ bool set_pump(bool stop, uint8_t speed)
     bool _stop;
     bool changed = false;
 
-    get_pump(&_stop, &_speed);
+    get_pump(_stop, _speed);
 
     if(stop != _stop)
     {
@@ -946,15 +946,15 @@ bool set_pump(bool stop, uint8_t speed)
     return changed;
 }
 
-void get_pump(bool *stop, uint8_t *speed)
+void get_pump(bool &stop, uint8_t &speed)
 {
 	uint8_t bits = 0;
 	bits |= digitalRead(PUMP_BIT_0);
 	bits |= (digitalRead(PUMP_BIT_1) << 1);
 	bits |= (digitalRead(PUMP_BIT_2) << 2);
 
-    *speed = bits;
-	*stop = digitalRead(PUMP_STOP_BIT);
+    speed = bits;
+	stop = digitalRead(PUMP_STOP_BIT);
 }
 
 void setup_wifi(void)
