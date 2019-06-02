@@ -66,16 +66,16 @@
 #define PUMP_BIT_1        		              6
 #define PUMP_BIT_2        		              5
 
-#define EPS_PUMP_FLOW_TIMEOUT               60000L
-#define EPS_PUMP_FLOW_TIMEOUT_CL            20000L
+#define EPS_PUMP_FLOW_TIMEOUT               30000L
 #define EPS_PUMP_START_TIMEOUT              30000L
+#define EPS_PUMP_FLOW_RATE                  7.5
 
 #define WATCHDOG_TIME                       8000
 
 #define EEPROM_PROGRAM_DATA                 16
 #define EEPROM_MAGIC_DATA                   0
 #define EEPROM_MAGIC                        0xDEADF00D
-#define EEPROM_VERSION                      12
+#define EEPROM_VERSION                      17
 
 #define MQTT_CLIENT_NAME                    "pool_controller"
 
@@ -84,9 +84,9 @@
 #define NTP_INTERVAL                        60 * 1000 // In miliseconds
 
 #define PROGRAM_LEVEL_TARGET                25500
-#define PROGRAM_PUMP_RUN_SPEED              4
-#define PROGRAM_PUMP_DRAIN_SPEED            7
-#define PROGRAM_PUMP_BOOST_SPEED            7
+#define PUMP_RUN_SPEED                      5
+#define PUMP_DRAIN_SPEED                    7
+#define PUMP_BOOST_SPEED                    7
 
 #define UPLOAD_WINDOW                       15000
 
@@ -104,6 +104,10 @@
 #define AC_OUTPUT_0                         17
 #define AC_OUTPUT_1                         18
 
+#define PUMP_PRIME_STOP_DURATION            60
+#define PUMP_PRIME_INTERVAL                 12
+#define PUMP_PRIME_MEASURE_DURATION         270
+
 // Cl Dosing
 // 33.6 ml per minute
 
@@ -114,8 +118,6 @@ enum programs {
     PROGRAM_RUN          = 1,
     PROGRAM_TIMER        = 2,
     PROGRAM_DRAIN        = 3,
-    PROGRAM_FILL         = 4,
-    PROGRAM_BOOST        = 5
 };
 
 enum switch_programs {
@@ -123,6 +125,13 @@ enum switch_programs {
     SWITCH_PROGRAM_ON    = 1,
     SWITCH_PROGRAM_RUN   = 2,
     SWITCH_PROGRAM_ABORT = 3
+};
+
+enum prime {
+    PUMP_PRIME_IDLE      = 0,
+    PUMP_PRIME_OFF       = 1,
+    PUMP_PRIME_RESTART   = 2,
+    PUMP_PRIME_MEASURE   = 2,
 };
 
 // Days of the week
@@ -156,6 +165,7 @@ struct DataReadings {
     ExpFilter<float> pump_pressure_s;
     bool flow_switch;
     uint8_t pump_speed;
+    bool pump_stop;
     int32_t error_count;
     float pump_flow;
     float fill_flow;
@@ -182,21 +192,40 @@ struct Switch {
     bool output;
 };
 
+struct BoostSwitch {
+    DateTime time;
+    int program;
+    int32_t duration;
+    int32_t counter;
+    bool output;
+    uint8_t pump_speed;
+};
+
+struct EPS {
+    bool error;
+    bool fault;
+    DateTime time;
+    DateTime start_time;
+};
+
+struct Pump {
+    uint8_t run_speed;
+    uint8_t drain_speed;
+    uint8_t boost_speed;
+    uint8_t speed;
+    bool stop;
+    DateTime prime_start;
+    uint8_t prime_state;
+};
+
 struct ProgramData {
     int current;
     float level_target;
-    uint8_t run_pump_speed;
-    uint8_t drain_pump_speed;
-    uint8_t prime;
-    DateTime boost_time;
-    int32_t boost_duration;
-    int boost_program;
-    uint8_t boost_pump_speed;
-    int32_t boost_counter;
-    struct Switch boost;
-    struct Switch cl_pump;
-    struct Switch robot;
-    unsigned long pump_start_counter;
+    Pump pump;
+    Switch boost;
+    Switch cl_pump;
+    Switch robot;
+    EPS eps;
     int update_interval;
     float alpha;
     bool force_update;
@@ -209,8 +238,7 @@ void pump_flow_ISR();
 void fill_flow_ISR();
 bool eeprom_read(void);
 bool eeprom_write(void);
-void process_eps_cl_pump();
-void process_eps_pump();
+void process_eps(DateTime now);
 void process_telemetry(uint32_t now);
 void read_sensors();
 void read_slow_sensors(DataReadings *readings);
@@ -223,10 +251,8 @@ float get_water_sensor_level(void);
 float get_pump_pressure(void);
 void setup_clock(void);
 void set_clock(void);
-void set_pump_speed(uint8_t speed);
-uint8_t get_pump_speed(void);
-void set_pump_stop(bool stop);
-bool get_pump_stop();
+bool set_pump(bool stop, uint8_t speed);
+void get_pump(bool *stop, uint8_t *speed);
 void setup_wifi(void);
 void tb_rpc_callback(char* topic, byte* payload, unsigned int length);
 void write_state(void);
@@ -238,4 +264,5 @@ void upload_attributes_start(DateTime *now);
 float read_pt100_sensor(Adafruit_MAX31865 *sensor);
 void make_datetime(char* buffer, size_t len, DateTime *now);
 bool send_push_event(const char* message, const char* priority);
+void check_switch(Switch &prog, DateTime &now, const char* progname);
 

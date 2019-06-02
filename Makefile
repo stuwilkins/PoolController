@@ -21,9 +21,6 @@
 # 
 
 
-OTA_PASSWORD = $(shell cat ota.passwd)
-VERSION=\"$(shell git describe --tags --always --dirty --long 2> /dev/null)\"
-
 ARDUINO_DIR   = /Applications/Arduino.app/Contents/Java
 ARDUINO_PACKAGE_DIR = $(HOME)/Library/Arduino15/packages
 ALTERNATE_CORE_PATH = $(HOME)/Library/Arduino15/packages/adafruit/hardware/samd/1.4.1
@@ -47,6 +44,13 @@ include /usr/local/opt/arduino-mk/Sam.mk
 #CC = arm-none-eabi-g++
 #CXX = arm-none-eabi-g++
 
+VERSION=\"$(shell git describe --tags --always --dirty --long 2> /dev/null)\"
+
+OTA_PASSWORD = $(shell cat ota.passwd)
+#OTA_ADDRESS = 172.16.1.145
+OTA_ADDRESS = localhost
+OTA_PORT = 65280
+
 .PHONY: test
 test: all
 	/usr/local/bin/ard-reset-arduino --zero $(DEVICE_PATH)
@@ -58,7 +62,7 @@ test: all
 	screen $(DEVICE_PATH) $(MONITOR_BAUDRATE)
 
 upload-ota : all
-	$(ARDUINO_OTA)/bin/arduinoOTA -address 172.16.1.145 -port 65280 \
+	$(ARDUINO_OTA)/bin/arduinoOTA -address $(OTA_ADDRESS) -port $(OTA_PORT) \
 	                              -username arduino -password $(OTA_PASSWORD) \
 								  -sketch build-adafruit_feather_m0/PoolController.bin \
 								  -upload /sketch -b -v
