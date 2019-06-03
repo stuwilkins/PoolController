@@ -164,7 +164,6 @@ struct DataReadings {
     bool flow_switch;
     uint8_t pump_speed;
     bool pump_stop;
-    int32_t error_count;
     float pump_flow;
     float fill_flow;
 	unsigned long loop_time;
@@ -224,6 +223,8 @@ struct ProgramData {
     Switch cl_pump;
     Switch robot;
     EPS eps;
+    DateTime last_run;
+    DateTime last_telemetry;
     int update_interval;
     float alpha;
     bool force_update;
@@ -262,4 +263,5 @@ void upload_attributes_start(DateTime *now);
 float read_pt100_sensor(Adafruit_MAX31865 *sensor);
 void make_datetime(char* buffer, size_t len, DateTime *now);
 void check_switch(Switch &prog, DateTime &now, const char* progname);
+void handle_error(const char *err);
 

@@ -77,8 +77,6 @@ static const char* mqtt_subscribe[]  = {"home/poolcontroller/request/+", 0};
 
 // Data Readings
 DataReadings sensor_readings;
-DateTime last;
-DateTime last_telemetry;
 
 // Running program
 ProgramData program_data;
@@ -87,34 +85,6 @@ unsigned long loop_time_millis;
 // ISR Data
 volatile PumpFlowRate pump_flow;
 volatile PumpFlowRate fill_flow;
-
-// Error handler which pauses and flashes the L led. 
-void handle_error(const char *err)
-{
-    // Enable the watchdog (just to make sure)
-    // Then timeout, this causes a reset
-    Watchdog.enable(WATCHDOG_TIME);
-	Serial.println(err);
-	while(1)
-	{
-		digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
-		delay(250);
-	}
-}
-
-// ISR Routines for flow rate meters
-
-void pump_flow_ISR()
-{
-	pump_flow.last = millis();
-	pump_flow.clicks++;
-}
-
-void fill_flow_ISR()
-{
-	fill_flow.last = millis();
-	fill_flow.clicks++;
-}
 
 void setup() {
 	// Set digital pins 
@@ -148,6 +118,8 @@ void setup() {
 
 	setup_wifi();
 	wifi_connect(WIFI_SSID, WIFI_PASSWORD);
+    wifi_client.setTimeout(1000);
+    tb_wifi_client.setTimeout(1000);
 
     // Now WiFi is up, connect to the syslog console
 	syslog_udp.begin(SYSLOG_PORT);
@@ -205,22 +177,22 @@ void setup() {
 	Watchdog.reset();  // Pet the dog!
 
 	// Set defaults
-	last = rtc.now();
-	last_telemetry = rtc.now();
+    DateTime now = rtc.now();
 
-	sensor_readings.error_count = 0;
-	sensor_readings.valid = false;
+	sensor_readings.valid        = false;
+
     sensor_readings.water_temp_s.setAlpha(ALPHA);
     sensor_readings.water_level_s.setAlpha(ALPHA);
     sensor_readings.pump_pressure_s.setAlpha(ALPHA);
-    sensor_readings.cl_output = 0;
-    sensor_readings.robot_output = 0;
 
 	pump_flow.last = millis();
 	pump_flow.clicks = 0;
 
 	fill_flow.last = millis();
 	fill_flow.clicks = 0;
+
+    program_data.last_run         = now;
+    program_data.last_telemetry   = now;
 
 	program_data.current          = PROGRAM_RUN;
 	program_data.level_target     = PROGRAM_LEVEL_TARGET;
@@ -236,23 +208,23 @@ void setup() {
 
     program_data.eps.error        = false;
     program_data.eps.fault        = false;
-    program_data.eps.time         = last;
-    program_data.eps.start_time   = last;
+    program_data.eps.time         = now;
+    program_data.eps.start_time   = now;
 
     program_data.boost.program    = SWITCH_PROGRAM_OFF;
-	program_data.boost.time       = last;
+	program_data.boost.time       = now;
 	program_data.boost.duration   = 60 * 60 * 8; // 30m
 	program_data.boost.counter    = 0;
 	program_data.boost.output     = false;
 
     program_data.cl_pump.program  = SWITCH_PROGRAM_OFF;
-    program_data.cl_pump.time     = last;
+    program_data.cl_pump.time     = now;
     program_data.cl_pump.duration = 0.5 * 60 * 60;
     program_data.cl_pump.counter  = 0;
     program_data.cl_pump.output   = false;
 
     program_data.robot.program    = SWITCH_PROGRAM_OFF;
-    program_data.robot.time       = last;
+    program_data.robot.time       = now;
     program_data.robot.duration   = 2 * 60 * 60;
     program_data.robot.counter    = 0;
     program_data.robot.output     = false;
@@ -281,7 +253,6 @@ void setup() {
 	Watchdog.reset(); // Pet the dog!
 
     // Upload attributes on load
-    DateTime now = rtc.now();
     upload_attributes_start(&now);
 
 	Watchdog.reset(); // Pet the dog!
@@ -390,7 +361,7 @@ void loop() {
     read_sensors();
     Watchdog.reset();  // Pet the dog!
 
-	if(now.hour() != last.hour())
+	if(now.hour() != program_data.last_run.hour())
 	{
         print_readings(&sensor_readings, LOG_INFO);
 
@@ -405,7 +376,7 @@ void loop() {
 	}
 
 	// Every second call poll
-	if(now.second() != last.second()) 
+	if(now.second() != program_data.last_run.second()) 
 	{
         // Each second read slow sensors
         read_slow_sensors(&sensor_readings);
@@ -496,10 +467,10 @@ void loop() {
 		eeprom_write();
         Watchdog.reset(); // Pet the dog!
 #endif
-        last = now;
+        program_data.last_run = now;
     }
 
-    if(((now - last_telemetry).totalseconds() >= program_data.update_interval) ||
+    if(((now - program_data.last_telemetry).totalseconds() >= program_data.update_interval) ||
             program_data.force_update)
     {
         // Flash the L led
@@ -511,7 +482,7 @@ void loop() {
         Watchdog.reset();  // Pet the dog!
         
         telemetry = true;
-        last_telemetry = now;
+        program_data.last_telemetry = now;
         program_data.force_update = false;
 	} 
 
@@ -889,10 +860,11 @@ void setup_clock(void)
 	}
 
 	if(rtc.lostPower())
-	{
+    {
 		syslog.log(LOG_ALERT, "RTC Lost Power");
-		set_clock();
 	}
+
+    set_clock();
 #endif
 }
 
@@ -1141,4 +1113,32 @@ void make_datetime(char* buffer, size_t len, DateTime *now)
             now->year(), now->month(), now->day(), 
             daysOfTheWeek[now->dayOfTheWeek()],
             now->hour(), now->minute(), now->second());
+}
+
+// Error handler which pauses and flashes the L led. 
+void handle_error(const char *err)
+{
+    // Enable the watchdog (just to make sure)
+    // Then timeout, this causes a reset
+    Watchdog.enable(WATCHDOG_TIME);
+	Serial.println(err);
+	while(1)
+	{
+		digitalWrite(OUTPUT_LED_L, !digitalRead(OUTPUT_LED_L));
+		delay(250);
+	}
+}
+
+// ISR Routines for flow rate meters
+
+void pump_flow_ISR()
+{
+	pump_flow.last = millis();
+	pump_flow.clicks++;
+}
+
+void fill_flow_ISR()
+{
+	fill_flow.last = millis();
+	fill_flow.clicks++;
 }
