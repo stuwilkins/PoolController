@@ -107,7 +107,7 @@ void setup() {
     digitalWrite(AC_OUTPUT_0, 0);
     digitalWrite(AC_OUTPUT_1, 0);
 
-	Serial.begin(115200, 0);
+	Serial.begin(115200);
         
 	// Set the L led hight to show we are configuring
 	digitalWrite(OUTPUT_LED_L, HIGH);
@@ -143,7 +143,6 @@ void setup() {
     {
         WiFiOTA.poll();
         Watchdog.reset();  // Pet the dog!
-        delay(250);
     }
     syslog.log(LOG_CRIT, "Upload window ended");
 
@@ -344,12 +343,12 @@ void loop() {
 	Watchdog.reset(); // Pet the dog!
     
     // Sync NTP client
-    //syslog.log(LOG_DEBUG, "ntp_client.update()");
-    //if(!ntp_client.update())
-    //{
-    //    syslog.log(LOG_CRIT, "Unable to update from NTP server");
-    //}
-	//Watchdog.reset(); // Pet the dog!
+    syslog.log(LOG_DEBUG, "ntp_client.update()");
+    if(!ntp_client.update())
+    {
+        syslog.log(LOG_CRIT, "Unable to update from NTP server");
+    }
+	Watchdog.reset(); // Pet the dog!
 
 	// Read the current time
     syslog.log(LOG_DEBUG, "Read RTC");
@@ -385,7 +384,6 @@ void loop() {
         // Now check for EPS
         process_eps(now);
         Watchdog.reset();  // Pet the dog!
-
 
         // Check switch programs
         
@@ -455,7 +453,6 @@ void loop() {
         // Now set pump speeds
         if(set_pump(program_data.pump.stop, program_data.pump.speed))
         {
-            syslog.logf(LOG_INFO, "Set pump speed to : %d", program_data.pump.run_speed);
         }
 
         // Now set switches
@@ -536,28 +533,37 @@ void process_eps(DateTime now)
     syslog.log(LOG_DEBUG, "process_eps()");
 
     // Check if we recently started pump
-    long delta = (now - program_data.eps.start_time).totalseconds();
-    if(delta < EPS_PUMP_START_TIMEOUT)
+    long start_delta = (now - program_data.eps.start_time).totalseconds();
+    if((start_delta < EPS_PUMP_START_TIMEOUT) && (sensor_readings.pump_flow < EPS_PUMP_FLOW_RATE))
     {
-        syslog.logf(LOG_DEBUG, "EPS : Pump started %ld ms ago, ignoring EPS timeout is %ld", 
-                delta, EPS_PUMP_START_TIMEOUT);
+        syslog.logf(LOG_INFO, "EPS : Pump started %ld s ago, ignoring EPS timeout is %d flow is %f GPM", 
+                start_delta, EPS_PUMP_START_TIMEOUT, sensor_readings.pump_flow);
         return;
     }
 
 	bool error = (sensor_readings.pump_flow < EPS_PUMP_FLOW_RATE);
+    long delta = (now - program_data.eps.time).totalseconds();
+
+    if(error)
+    {
+        syslog.logf(LOG_DEBUG, "process_eps() : error = %d eps.error = %d eps.fault = %d flow = %f delta = %ld",
+                error, program_data.eps.error, program_data.eps.fault, sensor_readings.pump_flow,
+                delta);
+    }
+
     if(error && !program_data.eps.error && !program_data.eps.fault)
     {
         program_data.eps.time = now;
         program_data.eps.error = true;
         program_data.eps.fault = true;
-        syslog.logf(LOG_INFO, "EPS : Pump flow error flow = %f gpm", sensor_readings.pump_flow);
+        syslog.log(LOG_INFO, "EPS : Set error and fault");
         return;
     }
 
     if(program_data.eps.error || program_data.eps.fault)
     {
         // We have a fault condition...
-        long delta = (now - program_data.eps.time).totalseconds();
+        syslog.logf(LOG_DEBUG, "process_eps() : delta = %ld", delta);
 
         if(delta > EPS_PUMP_FLOW_TIMEOUT)
         {
@@ -565,7 +571,7 @@ void process_eps(DateTime now)
             if(!error)
             {
                 // No error ... reset
-                syslog.log(LOG_INFO, "EPS : Reset");
+                syslog.log(LOG_INFO, "EPS : RESET");
                 program_data.eps.error = false;
                 program_data.eps.fault = false;
                 return;
@@ -580,14 +586,14 @@ void process_eps(DateTime now)
                 {
                     set_pump(true, 0);
                     program_data.current = PROGRAM_HALT;
-                    syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld ms)", delta); 
+                    syslog.logf(LOG_ERR, "EPS : Flow error - turning off pump (%ld s)", delta); 
                 }
 
                 // Check for Cl Pump
                 if(program_data.cl_pump.program != SWITCH_PROGRAM_OFF)
                 {
                     program_data.cl_pump.program = SWITCH_PROGRAM_ABORT;
-                    syslog.log(LOG_ERR, "EPS : Flow error - turning off Cl pump");
+                    syslog.logf(LOG_ERR, "EPS : Flow error - turning off Cl pump (%ld s)", delta);
                 }
             }
 
@@ -651,7 +657,7 @@ void read_sensors()
 
 bool get_flow_switch(void)
 {
-	return digitalRead(FLOW_SWITCH);
+	return !digitalRead(FLOW_SWITCH);
 }
 
 float get_fill_flow(void)
@@ -913,6 +919,11 @@ bool set_pump(bool stop, uint8_t speed)
         digitalWrite(PUMP_BIT_1, speed & 0x2);
         digitalWrite(PUMP_BIT_2, speed & 0x4);
         changed = true;
+    }
+
+    if(changed)
+    {
+        syslog.logf(LOG_INFO, "Pump stop = %d, speed = %d", stop, speed);
     }
 
     return changed;

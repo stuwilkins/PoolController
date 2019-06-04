@@ -66,8 +66,8 @@
 #define PUMP_BIT_1        		              6
 #define PUMP_BIT_2        		              5
 
-#define EPS_PUMP_FLOW_TIMEOUT               30000L
-#define EPS_PUMP_START_TIMEOUT              30000L
+#define EPS_PUMP_FLOW_TIMEOUT               15
+#define EPS_PUMP_START_TIMEOUT              60
 #define EPS_PUMP_FLOW_RATE                  7.5
 
 #define WATCHDOG_TIME                       8000
@@ -81,14 +81,14 @@
 
 #define NTP_ADDRESS                         "north-america.pool.ntp.org"
 #define NTP_OFFSET                          -4 * 60 * 60 // In seconds
-#define NTP_INTERVAL                        60 * 1000 // In miliseconds
+#define NTP_INTERVAL                        30 * 60 * 1000 // In miliseconds
 
 #define PROGRAM_LEVEL_TARGET                25500
 #define PUMP_RUN_SPEED                      5
 #define PUMP_DRAIN_SPEED                    7
 #define PUMP_BOOST_SPEED                    7
 
-#define UPLOAD_WINDOW                       15000
+#define UPLOAD_WINDOW                       30000
 
 #define ALPHA                               0.025
 
